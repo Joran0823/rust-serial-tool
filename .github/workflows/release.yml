@@ -1,0 +1,74 @@
+name: Release
+
+# 推送 v* 格式的 tag（如 v1.2.3）后：
+# 1. 在 Windows / Linux / macOS 上编译 release 版本；
+# 2. 将 tag 名作为版本号注入程序（标题栏显示 串口调试助手 V1.2.3）；
+# 3. 把各平台产物上传到对应的 GitHub Release 页面。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: windows-x86_64
+            binary: serial-tool.exe
+          - os: ubuntu-latest
+            artifact: linux-x86_64
+            binary: serial-tool
+          - os: macos-latest
+            artifact: macos-universal
+            binary: serial-tool
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libwayland-dev \
+            libvulkan-dev libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2.7.7
+
+      - name: Build release
+        run: cargo build --release
+        env:
+          # tag（如 v1.2.3）即版本号，由 build.rs 注入程序
+          SERIAL_TOOL_VERSION: ${{ github.ref_name }}
+
+      - name: Prepare release asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            asset="serial-tool-${GITHUB_REF_NAME}-${{ matrix.artifact }}.exe"
+          else
+            asset="serial-tool-${GITHUB_REF_NAME}-${{ matrix.artifact }}"
+          fi
+          mv "target/release/${{ matrix.binary }}" "dist/$asset"
+          chmod +x "dist/$asset"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2.2.1
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
