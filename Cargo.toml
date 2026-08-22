@@ -1,0 +1,19 @@
+[package]
+name = "rust-serial-tool"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.45"
+directories = "6.0.0"
+eframe = "0.35.0"
+encoding_rs = "0.8.35"
+image = "0.25"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serialport = "4.9.0"
+thiserror = "2.0.19"
+toml = "1.1.4"
+
+[build-dependencies]
+embed-resource = "3"
