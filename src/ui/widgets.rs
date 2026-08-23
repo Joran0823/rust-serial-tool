@@ -80,6 +80,20 @@ pub fn combo(
     options: impl FnOnce(&mut egui::Ui),
 ) {
     let text: String = text.into();
+    // 中英文文案宽度差异大：固定宽度会裁掉英文文本（如 “Line by line”）。
+    // 按当前文字实际宽度自适应加宽，预留 8px 左边距 + 26px 箭头区 + 4px 右边距；
+    // 宽度传 available_width() 的控件（如端口下拉框）不受影响。
+    let text_width = ui.ctx().fonts_mut(|f| {
+        f.layout_no_wrap(
+            text.clone(),
+            egui::FontId::proportional(14.0),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+    });
+    let needed = text_width + 8.0 + 26.0 + 4.0;
+    let width = width.max(needed.min(ui.available_width()));
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let resp = if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -129,6 +143,8 @@ pub fn combo(
     if enabled {
         egui::Popup::menu(&resp).show(|ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            // 弹出菜单至少与下拉框同宽，避免选项文字看起来被裁切
+            ui.set_min_width(width);
             options(ui);
         });
     }
