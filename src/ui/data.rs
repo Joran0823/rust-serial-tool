@@ -2,8 +2,9 @@
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的接收区。
 //!
 //! 展示原理：原始接收/发送字节按批次拆分为“数据段”，标记文本（如 `[RX] `）
-//! 与原始字节分离存储。解码时原始字节流保持连续（流式解码器跨段保留未完成的
-//! 多字节字符），标记文本插入到解码结果中——因此标记不会打断中文字符。
+//! 与原始字节分离存储。只要遇到带时间戳的标记就先换行、再显示输出（每条数据段
+//! 独占一行）。解码时原始字节流保持连续（流式解码器跨段保留未完成的多字节字符），
+//! 标记文本插入到解码结果中——因此标记不会打断中文字符。
 
 use crate::app::SerialApp;
 use crate::codec;
@@ -132,6 +133,11 @@ impl SerialApp {
     /// 将某数据段（标记 + 字节）解码并追加到显示缓存。
     fn append_segment_to_cache(&mut self, start: usize, end: usize, marker: &str) {
         let bytes = &self.data_display[start..end];
+        // 只要遇到时间戳（RX/TX 标记）就先换行再显示输出；
+        // 仅当展示区还是空的时候不补，避免首行出现空行。
+        if !self.display_cache.is_empty() {
+            self.display_cache.push('\n');
+        }
         self.display_cache.push_str(marker);
         match self.config.display_mode {
             DisplayMode::Text => {
@@ -358,5 +364,31 @@ mod tests {
         app.refresh_display_cache();
         assert!(app.display_cache.len() <= DATA_DISPLAY_CAP + 16 * 1024);
         assert!(app.display_cache.ends_with('A'));
+    }
+
+    #[test]
+    fn rx_tx_segments_are_separated_by_newline() {
+        let mut app = make_app();
+        app.append_rx(b"hello");
+        app.append_tx(b"world");
+        app.refresh_display_cache();
+        let lines: Vec<&str> = app.display_cache.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("[RX] hello"));
+        assert!(lines[1].contains("[TX] world"));
+    }
+
+    #[test]
+    fn timestamp_always_preceded_by_newline() {
+        let mut app = make_app();
+        app.append_rx(b"ok\n"); // 上一段数据已以换行结尾
+        app.append_tx(b"next");
+        app.refresh_display_cache();
+        // 只要遇到时间戳就先换行：即使上一段已换行也会再补一个，形成空行
+        let lines: Vec<&str> = app.display_cache.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("[RX] ok"));
+        assert!(lines[1].is_empty());
+        assert!(lines[2].contains("[TX] next"));
     }
 }
