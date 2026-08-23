@@ -4,6 +4,7 @@
 //! 同时支持 TXT 便捷导入（每行一条文本条目，忽略空行）。
 
 use crate::config::{QueueItem, SendMode, SendQueue};
+use crate::i18n::Language;
 
 const MAX_ITEMS: usize = 1000;
 
@@ -13,10 +14,15 @@ pub fn export_queue_toml(queue: &SendQueue) -> String {
 }
 
 /// 从 TOML 解析队列（含名称与条目）。
-pub fn import_queue_toml(s: &str) -> Result<SendQueue, String> {
-    let queue: SendQueue = toml::from_str(s).map_err(|e| format!("TOML 解析失败: {e}"))?;
+pub fn import_queue_toml(s: &str, lang: Language) -> Result<SendQueue, String> {
+    let strings = lang.strings();
+    let queue: SendQueue = toml::from_str(s)
+        .map_err(|e| strings.fill(strings.toml_parse_failed_fmt, &[("e", e.to_string())]))?;
     if queue.items.len() > MAX_ITEMS {
-        return Err(format!("条目数超过上限 {MAX_ITEMS}"));
+        return Err(strings.fill(
+            strings.too_many_items_fmt,
+            &[("MAX", MAX_ITEMS.to_string())],
+        ));
     }
     Ok(queue)
 }
@@ -48,7 +54,7 @@ mod tests {
             selected: true,
         });
         let s = export_queue_toml(&q);
-        let q2 = import_queue_toml(&s).expect("parse");
+        let q2 = import_queue_toml(&s, Language::Chinese).expect("parse");
         assert_eq!(q.name, q2.name);
         assert_eq!(q.items.len(), q2.items.len());
         assert_eq!(q.items[1].content, q2.items[1].content);

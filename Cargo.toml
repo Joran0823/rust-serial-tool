@@ -3,6 +3,10 @@ name = "rust-serial-tool"
 version = "1.0.0"
 edition = "2024"
 
+[[bin]]
+name = "serial-tool"
+path = "src/main.rs"
+
 [dependencies]
 chrono = "0.4.45"
 directories = "6.0.0"
@@ -12,6 +16,7 @@ image = "0.25"
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serialport = "4.9.0"
+sys-locale = "0.3.2"
 thiserror = "2.0.19"
 toml = "1.1.4"
 

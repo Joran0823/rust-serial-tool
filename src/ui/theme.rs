@@ -36,7 +36,9 @@ pub fn apply(ctx: &egui::Context) {
     v.extreme_bg_color = BG;
     v.override_text_color = Some(TEXT);
     v.selection.bg_fill = BLUE_CHECK;
-    v.selection.stroke = egui::Stroke::new(1.0, BLUE_CHECK);
+    // egui 渲染选中文字时用 selection.stroke.color 着色、selection.bg_fill 画高亮底，
+    // 两者不能相同（此前均为蓝色导致选中文字不可见）。
+    v.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
     v.hyperlink_color = BLUE;
 
     v.widgets.noninteractive.bg_fill = egui::Color32::WHITE;
@@ -94,4 +96,25 @@ pub fn outline_widget(text: &str) -> egui::Button<'static> {
         .fill(egui::Color32::WHITE)
         .stroke(egui::Stroke::new(1.0, BLUE))
         .corner_radius(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_text_color_differs_from_highlight() {
+        // egui 用 selection.stroke.color 给选中文字着色、selection.bg_fill 画高亮底；
+        // 两者相同会导致选中文字不可见（此前 bug：均为 BLUE_CHECK）。
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let visuals = &ctx.style_of(theme).visuals;
+            assert_ne!(
+                visuals.selection.bg_fill,
+                visuals.selection.stroke.color,
+                "选中文字颜色不能与高亮底色相同（theme={theme:?}）"
+            );
+        }
+    }
 }

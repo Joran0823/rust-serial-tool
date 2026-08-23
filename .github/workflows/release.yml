@@ -33,7 +33,7 @@ jobs:
             binary: serial-tool
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -42,7 +42,7 @@ jobs:
           sudo apt-get install -y \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libwayland-dev \
-            libvulkan-dev libssl-dev
+            libvulkan-dev libssl-dev libudev-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -67,7 +67,7 @@ jobs:
           chmod +x "dist/$asset"
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2.2.1
+        uses: softprops/action-gh-release@v3.0.2
         with:
           files: dist/*
           generate_release_notes: true

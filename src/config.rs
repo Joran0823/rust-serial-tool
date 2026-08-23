@@ -1,5 +1,6 @@
 //! 应用配置：端口参数、UI 偏好、发送队列等，序列化为 TOML 持久化。
 
+use crate::i18n::Language;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -49,11 +50,15 @@ impl StopBits {
         }
     }
 
-    pub fn to_serial(self) -> Result<serialport::StopBits, String> {
+    pub fn to_serial(self, lang: Language) -> Result<serialport::StopBits, String> {
         match self {
             Self::One => Ok(serialport::StopBits::One),
             Self::Two => Ok(serialport::StopBits::Two),
-            Self::OnePointFive => Err("serialport 库暂不支持 1.5 停止位".to_string()),
+            Self::OnePointFive => Err(if lang == Language::Chinese {
+                "serialport 库暂不支持 1.5 停止位".to_string()
+            } else {
+                "1.5 stop bits are not supported by the serialport crate".to_string()
+            }),
         }
     }
 }
@@ -79,13 +84,21 @@ impl Parity {
         }
     }
 
-    pub fn to_serial(self) -> Result<serialport::Parity, String> {
+    pub fn to_serial(self, lang: Language) -> Result<serialport::Parity, String> {
         match self {
             Self::None => Ok(serialport::Parity::None),
             Self::Even => Ok(serialport::Parity::Even),
             Self::Odd => Ok(serialport::Parity::Odd),
-            Self::Mark => Err("serialport 库暂不支持 Mark 校验".to_string()),
-            Self::Space => Err("serialport 库暂不支持 Space 校验".to_string()),
+            Self::Mark => Err(if lang == Language::Chinese {
+                "serialport 库暂不支持 Mark 校验".to_string()
+            } else {
+                "Mark parity is not supported by the serialport crate".to_string()
+            }),
+            Self::Space => Err(if lang == Language::Chinese {
+                "serialport 库暂不支持 Space 校验".to_string()
+            } else {
+                "Space parity is not supported by the serialport crate".to_string()
+            }),
         }
     }
 }
@@ -139,10 +152,16 @@ pub enum DisplayMode {
 }
 
 impl DisplayMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Text => "文本",
-            Self::Hex => "HEX",
+    pub fn label(self, lang: Language) -> &'static str {
+        match lang {
+            Language::Chinese => match self {
+                Self::Text => "文本",
+                Self::Hex => "HEX",
+            },
+            Language::English => match self {
+                Self::Text => "Text",
+                Self::Hex => "HEX",
+            },
         }
     }
 }
@@ -155,10 +174,16 @@ pub enum SendMode {
 }
 
 impl SendMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Text => "文本",
-            Self::Hex => "HEX",
+    pub fn label(self, lang: Language) -> &'static str {
+        match lang {
+            Language::Chinese => match self {
+                Self::Text => "文本",
+                Self::Hex => "HEX",
+            },
+            Language::English => match self {
+                Self::Text => "Text",
+                Self::Hex => "HEX",
+            },
         }
     }
 }
@@ -174,12 +199,20 @@ pub enum LineEnding {
 }
 
 impl LineEnding {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::None => "无",
-            Self::CR => "CR",
-            Self::LF => "LF",
-            Self::CRLF => "CRLF",
+    pub fn label(self, lang: Language) -> &'static str {
+        match lang {
+            Language::Chinese => match self {
+                Self::None => "无",
+                Self::CR => "CR",
+                Self::LF => "LF",
+                Self::CRLF => "CRLF",
+            },
+            Language::English => match self {
+                Self::None => "None",
+                Self::CR => "CR",
+                Self::LF => "LF",
+                Self::CRLF => "CRLF",
+            },
         }
     }
 
@@ -219,10 +252,16 @@ pub enum FileSendMode {
 }
 
 impl FileSendMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::WholeFile => "整块发送",
-            Self::LineByLine => "逐行发送",
+    pub fn label(self, lang: Language) -> &'static str {
+        match lang {
+            Language::Chinese => match self {
+                Self::WholeFile => "整块发送",
+                Self::LineByLine => "逐行发送",
+            },
+            Language::English => match self {
+                Self::WholeFile => "Whole file",
+                Self::LineByLine => "Line by line",
+            },
         }
     }
 }
@@ -273,6 +312,9 @@ impl Default for SendQueue {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub port: PortSettings,
+    /// 界面语言（缺省时按系统语言决定）
+    #[serde(default = "default_language")]
+    pub language: Language,
     pub display_mode: DisplayMode,
     pub text_encoding: TextEncoding,
     pub autoscroll: bool,
@@ -294,6 +336,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             port: PortSettings::default(),
+            language: Language::system(),
             display_mode: DisplayMode::Text,
             text_encoding: TextEncoding::Utf8,
             autoscroll: true,
@@ -313,6 +356,10 @@ impl Default for Config {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_language() -> Language {
+    Language::system()
 }
 
 impl Config {
@@ -365,6 +412,7 @@ mod tests {
         let s = toml::to_string(&c).expect("serialize");
         let c2: Config = toml::from_str(&s).expect("deserialize");
         assert_eq!(c.port.baud_rate, c2.port.baud_rate);
+        assert_eq!(c.language, c2.language);
         assert_eq!(c.queues[0].name, c2.queues[0].name);
         assert_eq!(c.queues[0].items[0].delay_ms, c2.queues[0].items[0].delay_ms);
     }
