@@ -950,7 +950,9 @@ mod tests {
     fn file_panel_button_shows_selected_file_name() {
         let ctx = eframe::egui::Context::default();
         let mut app = make_app();
-        app.pending_file = Some(std::path::PathBuf::from("C:\\data\\test.bin"));
+        // 使用平台无关的相对路径：Windows 上为 data\test.bin，
+        // macOS/Linux 上为 data/test.bin，两者 file_name() 都返回 test.bin。
+        app.pending_file = Some(std::path::Path::new("data").join("test.bin"));
         let output = ctx.run_ui(Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
