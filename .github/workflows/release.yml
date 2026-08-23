@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* 格式的 tag（如 v1.2.3）后：
+# 推送 v* / V* 格式的 tag（如 v1.2.3、V1.2.3）后：
 # 1. 在 Windows / Linux / macOS 上编译 release 版本；
 # 2. 将 tag 名作为版本号注入程序（标题栏显示 串口调试助手 V1.2.3）；
 # 3. 把各平台产物上传到对应的 GitHub Release 页面。
@@ -8,6 +8,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'V*'
 
 permissions:
   contents: write
