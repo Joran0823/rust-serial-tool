@@ -3,6 +3,10 @@ name = "rust-serial-tool"
 version = "1.0.0"
 edition = "2024"
 
+[[bin]]
+name = "serial-tool"
+path = "src/main.rs"
+
 [dependencies]
 chrono = "0.4.45"
 directories = "6.0.0"
