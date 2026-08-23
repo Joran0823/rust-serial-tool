@@ -80,6 +80,7 @@ impl SerialApp {
                                         self.config.port.baud_rate = v;
                                     }
                                 }
+                                widgets::text_edit_context_menu(ui, &edit, true, &self.baud_input);
                                 edit.on_hover_text("串口通信速率");
                                 ui.add_sized(
                                     [20.0, 20.0],

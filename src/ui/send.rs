@@ -13,7 +13,7 @@ use eframe::egui;
 impl SerialApp {
     /// 布局3-子1：发送文本框（可读写，填充父控件大小）。
     pub fn send_input_box(&mut self, ui: &mut egui::Ui) {
-        ui.add_sized(
+        let resp = ui.add_sized(
             [ui.available_width(), ui.available_height()],
             egui::TextEdit::multiline(&mut self.send_input)
                 .font(egui::TextStyle::Monospace)
@@ -23,6 +23,7 @@ impl SerialApp {
                 .desired_width(f32::INFINITY)
                 .background_color(egui::Color32::WHITE),
         );
+        widgets::text_edit_context_menu(ui, &resp, true, &self.send_input);
     }
 
     /// 布局3-子2：发送按钮行（发送/清空发送/添加到队列/模式/行尾/历史/定时发送/间隔，全部垂直居中）。
@@ -320,11 +321,12 @@ impl SerialApp {
                                     ui.selectable_value(&mut item.mode, SendMode::Hex, "HEX");
                                 },
                             );
-                            ui.add(
+                            let content_edit = ui.add(
                                 egui::TextEdit::singleline(&mut item.content)
                                     .desired_width(content_w)
                                     .hint_text("内容（空条目发送时忽略）"),
                             );
+                            widgets::text_edit_context_menu(ui, &content_edit, true, &item.content);
                             if ui
                                 .add_sized([send_w, 27.0], theme::outline_widget("发送"))
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)

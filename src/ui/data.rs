@@ -17,6 +17,8 @@ use std::io::Write;
 const DATA_DISPLAY_CAP: usize = 256 * 1024;
 /// 显示缓存字符数上限（超出后丢弃最早的内容）
 const DISPLAY_CACHE_CAP: usize = 300_000;
+/// 接收区右键菜单“全选”的一次性标记键（存储于 egui 临时数据）
+const RECV_SELECT_ALL_KEY: &str = "recv_select_all";
 
 /// 一个数据段：标记文本 + 原始字节在展示缓冲中的范围。
 #[derive(Clone, Debug)]
@@ -30,6 +32,18 @@ impl SerialApp {
     /// 布局2-子2：接收区（内容填充、宽高自适应、无边框），只读文本框 + 符合只读样式的浅灰背景。
     pub fn receive_area(&mut self, ui: &mut egui::Ui) {
         self.refresh_display_cache();
+
+        // 右键菜单“全选”：egui 的 Label 选区没有公开的设置接口，且点击菜单项会触发
+        // egui 自带的“点击别处取消选中”，因此用自定义高亮（蓝底白字）模拟选中效果。
+        let select_all_id = egui::Id::new(RECV_SELECT_ALL_KEY);
+        let mut select_all = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(select_all_id))
+            .unwrap_or(false);
+        if select_all && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ui.ctx().data_mut(|d| d.remove_temp::<bool>(select_all_id));
+            select_all = false;
+        }
 
         if self.display_dropped > 0 {
             ui.label(
@@ -71,13 +85,42 @@ impl SerialApp {
                                 .halign(egui::Align::Min),
                             );
                         } else {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&self.display_cache).monospace(),
-                                )
+                            let label = egui::Label::new(
+                                egui::RichText::new(&self.display_cache)
+                                    .monospace()
+                                    .color(if select_all {
+                                        egui::Color32::WHITE
+                                    } else {
+                                        theme::TEXT
+                                    }),
+                            )
                                 .wrap_mode(egui::TextWrapMode::Extend)
-                                .halign(egui::Align::Min),
-                            );
+                                .halign(egui::Align::Min);
+                            // 全选高亮：蓝底 + 白字，模拟选区效果
+                            let resp = if select_all {
+                                egui::Frame::new()
+                                    .fill(theme::BLUE_CHECK)
+                                    .inner_margin(egui::Margin::ZERO)
+                                    .show(ui, |ui| ui.add(label))
+                                    .inner
+                            } else {
+                                ui.add(label)
+                            };
+                            // 点击/拖动该区域时退出全选高亮，恢复 egui 原生文本选择
+                            if select_all && (resp.clicked() || resp.dragged()) {
+                                ui.ctx().data_mut(|d| d.remove_temp::<bool>(select_all_id));
+                            }
+                            // 只读展示区右键菜单：全选 + 复制（无粘贴）
+                            resp.context_menu(|ui| {
+                                if ui.selectable_label(false, "全选").clicked() {
+                                    ui.ctx().data_mut(|d| d.insert_temp(select_all_id, true));
+                                    ui.close();
+                                }
+                                if ui.selectable_label(false, "复制").clicked() {
+                                    ui.ctx().copy_text(self.display_cache.clone());
+                                    ui.close();
+                                }
+                            });
                         }
                     });
             });
@@ -390,5 +433,32 @@ mod tests {
         assert!(lines[0].contains("[RX] ok"));
         assert!(lines[1].is_empty());
         assert!(lines[2].contains("[TX] next"));
+    }
+
+    #[test]
+    fn receive_area_select_all_renders_highlight() {
+        let mut app = make_app();
+        app.append_rx(b"hello");
+        app.refresh_display_cache();
+        let ctx = egui::Context::default();
+        // 模拟右键菜单点击“全选”后设置的标记
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(RECV_SELECT_ALL_KEY), true));
+
+        let output = ctx.run_ui(Default::default(), |ui| {
+            app.receive_area(ui);
+        });
+
+        // 全选模式下应绘制出蓝色高亮（蓝底白字）
+        let prims = ctx.tessellate(output.shapes, 1.0);
+        let mut found = false;
+        for p in prims {
+            if let egui::epaint::Primitive::Mesh(mesh) = p.primitive
+                && mesh.vertices.iter().any(|v| v.color == theme::BLUE_CHECK)
+            {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "全选模式下应绘制蓝色高亮");
     }
 }
