@@ -771,6 +771,25 @@ mod tests {
         }
     }
 
+    /// 与应用启动时一致的 Context：默认字体 + CJK 字体优先。
+    /// 渲染测试必须使用真实字体，否则中文文本在无 CJK 字体的环境中
+    /// （如 CI 的 macOS/Windows runner）渲染结果会不一致。
+    fn cjk_ctx() -> eframe::egui::Context {
+        let ctx = eframe::egui::Context::default();
+        let mut fonts = eframe::egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "cjk".to_owned(),
+            Arc::new(eframe::egui::FontData::from_static(include_bytes!(
+                "../../assets/fonts/NotoSansCJKsc-Regular.otf"
+            ))),
+        );
+        if let Some(list) = fonts.families.get_mut(&eframe::egui::FontFamily::Proportional) {
+            list.insert(0, "cjk".to_owned());
+        }
+        ctx.set_fonts(fonts);
+        ctx
+    }
+
     /// 收集渲染输出中所有文本及其 x 位置。
     fn text_positions(output: &eframe::egui::FullOutput) -> Vec<(String, f32, f32)> {
         let mut out = Vec::new();
@@ -784,19 +803,7 @@ mod tests {
 
     #[test]
     fn config_panel_layout_keeps_all_controls() {
-        let ctx = eframe::egui::Context::default();
-        // 使用应用同款 CJK 字体，测量结果才与真实界面一致
-        let mut fonts = eframe::egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "cjk".to_owned(),
-            Arc::new(eframe::egui::FontData::from_static(include_bytes!(
-                "../../assets/fonts/NotoSansCJKsc-Regular.otf"
-            ))),
-        );
-        if let Some(list) = fonts.families.get_mut(&eframe::egui::FontFamily::Proportional) {
-            list.insert(0, "cjk".to_owned());
-        }
-        ctx.set_fonts(fonts);
+        let ctx = cjk_ctx();
 
         for lang in [Language::Chinese, Language::English] {
             let mut app = make_app();
@@ -864,18 +871,7 @@ mod tests {
 
     #[test]
     fn config_panel_language_button_visible_in_real_panel() {
-        let ctx = eframe::egui::Context::default();
-        let mut fonts = eframe::egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "cjk".to_owned(),
-            Arc::new(eframe::egui::FontData::from_static(include_bytes!(
-                "../../assets/fonts/NotoSansCJKsc-Regular.otf"
-            ))),
-        );
-        if let Some(list) = fonts.families.get_mut(&eframe::egui::FontFamily::Proportional) {
-            list.insert(0, "cjk".to_owned());
-        }
-        ctx.set_fonts(fonts);
+        let ctx = cjk_ctx();
 
         for lang in [Language::Chinese, Language::English] {
             let mut app = make_app();
@@ -914,7 +910,7 @@ mod tests {
 
     #[test]
     fn file_panel_layout_keeps_all_controls() {
-        let ctx = eframe::egui::Context::default();
+        let ctx = cjk_ctx();
         let mut app = make_app();
         let output = ctx.run_ui(Default::default(), |ui| {
             ui.allocate_ui_with_layout(
@@ -948,7 +944,7 @@ mod tests {
 
     #[test]
     fn file_panel_button_shows_selected_file_name() {
-        let ctx = eframe::egui::Context::default();
+        let ctx = cjk_ctx();
         let mut app = make_app();
         // 使用平台无关的相对路径：Windows 上为 data\test.bin，
         // macOS/Linux 上为 data/test.bin，两者 file_name() 都返回 test.bin。
@@ -969,7 +965,7 @@ mod tests {
 
     #[test]
     fn file_panel_shows_progress_bar_while_sending() {
-        let ctx = eframe::egui::Context::default();
+        let ctx = cjk_ctx();
         let mut app = make_app();
         app.file_send_active = true;
         app.file_progress = Some((50, 100));
@@ -989,4 +985,5 @@ mod tests {
         );
         assert!(positions.iter().any(|(t, _, _)| t == s.cancel));
     }
+
 }
