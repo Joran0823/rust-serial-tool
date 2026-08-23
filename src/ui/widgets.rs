@@ -10,12 +10,13 @@ use eframe::egui;
 /// 会让文本框失焦，所以执行动作后再次请求焦点（egui 只在聚焦时绘制选区并处理
 /// 剪贴板事件）。egui 的右键会把光标移到点击处并清空选区，因此右键时用上一帧
 /// 的选区快照恢复，保证选中文本后右键不清空。`text` 为文本框当前内容，用于
-/// 计算全选的字符范围。
+/// 计算全选的字符范围。`strings` 为当前语言的界面文案。
 pub fn text_edit_context_menu(
     ui: &mut egui::Ui,
     response: &egui::Response,
     editable: bool,
     text: &str,
+    strings: &crate::i18n::Strings,
 ) {
     // 上一帧的选区快照（用于恢复右键清掉的选区）
     let stash_id = egui::Id::new(("text_edit_sel_stash", response.id));
@@ -36,17 +37,17 @@ pub fn text_edit_context_menu(
     }
 
     response.context_menu(|ui| {
-        if ui.selectable_label(false, "全选").clicked() {
+        if ui.selectable_label(false, strings.select_all).clicked() {
             select_all_text(ui.ctx(), response.id, text);
             ui.memory_mut(|mem| mem.request_focus(response.id));
             ui.close();
         }
-        if ui.selectable_label(false, "复制").clicked() {
+        if ui.selectable_label(false, strings.copy).clicked() {
             ui.memory_mut(|mem| mem.request_focus(response.id));
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestCopy);
             ui.close();
         }
-        if editable && ui.selectable_label(false, "粘贴").clicked() {
+        if editable && ui.selectable_label(false, strings.paste).clicked() {
             ui.memory_mut(|mem| mem.request_focus(response.id));
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
             ui.close();

@@ -2,6 +2,7 @@
 //! 每次打开串口额外启动一个读线程（通过 try_clone 共享句柄）。
 
 use crate::config::{FileSendMode, PortSettings};
+use crate::i18n::Language;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub enum Command {
     Open(PortSettings),
+    SetLanguage(Language),
     Close,
     Write(Vec<u8>),
     StartPeriodic { bytes: Vec<u8>, interval_ms: u32 },
@@ -63,10 +65,10 @@ pub struct SerialSession {
 }
 
 impl SerialSession {
-    pub fn spawn() -> Self {
+    pub fn spawn(lang: Language) -> Self {
         let (cmd_tx, cmd_rx) = channel();
         let (evt_tx, evt_rx) = sync_channel(1024);
-        let handle = std::thread::spawn(move || writer_loop(cmd_rx, evt_tx));
+        let handle = std::thread::spawn(move || writer_loop(cmd_rx, evt_tx, lang));
         Self {
             cmd_tx,
             evt_rx,
@@ -116,11 +118,12 @@ impl FileState {
         mode: FileSendMode,
         line_ending: Vec<u8>,
         line_interval_ms: u32,
+        lang: Language,
     ) -> Result<Self, String> {
         const MAX_FILE: usize = 512 * 1024 * 1024;
         let data = std::fs::read(&path).map_err(|e| e.to_string())?;
         if data.len() > MAX_FILE {
-            return Err("文件过大（超过 512MB）".to_string());
+            return Err(lang.strings().file_too_large.to_string());
         }
         let name = path
             .file_name()
@@ -162,7 +165,7 @@ impl FileState {
     }
 }
 
-fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
+fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>, mut lang: Language) {
     let mut port: Option<Box<dyn serialport::SerialPort>> = None;
     let mut reader_stop: Option<Arc<AtomicBool>> = None;
     let mut periodic: Option<PeriodicState> = None;
@@ -182,28 +185,36 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
                     file = None;
                     let _ = evt_tx.try_send(Event::Periodic(false));
 
-                    match open_serial(&settings) {
+                    match open_serial(&settings, lang) {
                         Ok(p) => match p.try_clone() {
                             Ok(clone) => {
                                 let flag = Arc::new(AtomicBool::new(false));
                                 let tx2 = evt_tx.clone();
                                 let flag2 = Arc::clone(&flag);
-                                std::thread::spawn(move || reader_loop(clone, tx2, flag2));
+                                std::thread::spawn(move || reader_loop(clone, tx2, flag2, lang));
                                 reader_stop = Some(flag);
                                 port = Some(p);
                                 let _ = evt_tx
                                     .try_send(Event::Opened { port_name: settings.port_name });
                             }
                             Err(e) => {
-                                let _ = evt_tx
-                                    .try_send(Event::Error(format!("打开串口失败: {e}")));
+                                let s = lang.strings();
+                                let _ = evt_tx.try_send(Event::Error(s.fill(
+                                    s.open_failed_fmt,
+                                    &[("e", e.to_string())],
+                                )));
                             }
                         },
                         Err(e) => {
-                            let _ = evt_tx.try_send(Event::Error(format!("打开串口失败: {e}")));
+                            let s = lang.strings();
+                            let _ = evt_tx.try_send(Event::Error(s.fill(
+                                s.open_failed_fmt,
+                                &[("e", e.to_string())],
+                            )));
                         }
                     }
                 }
+                Command::SetLanguage(l) => lang = l,
                 Command::Close => {
                     if let Some(flag) = reader_stop.take() {
                         flag.store(true, Ordering::Relaxed);
@@ -218,7 +229,7 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
                     let _ = evt_tx.try_send(Event::Closed);
                 }
                 Command::Write(bytes) => {
-                    let _ = write_all(&mut port, &evt_tx, &bytes);
+                    let _ = write_all(&mut port, &evt_tx, &bytes, lang);
                 }
                 Command::StartPeriodic { bytes, interval_ms } => {
                     periodic = Some(PeriodicState {
@@ -234,7 +245,8 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
                 }
                 Command::StartQueue { name, items } => {
                     if items.is_empty() {
-                        let _ = evt_tx.try_send(Event::Error("队列为空，无法发送".to_string()));
+                        let _ =
+                            evt_tx.try_send(Event::Error(lang.strings().queue_empty.to_string()));
                     } else {
                         queue = Some(QueueState {
                             items,
@@ -258,7 +270,7 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
                     mode,
                     line_ending,
                     line_interval_ms,
-                } => match FileState::new(path, mode, line_ending, line_interval_ms) {
+                } => match FileState::new(path, mode, line_ending, line_interval_ms, lang) {
                     Ok(fs) => {
                         file = Some(fs);
                         periodic = None;
@@ -272,7 +284,11 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
                         });
                     }
                     Err(e) => {
-                        let _ = evt_tx.try_send(Event::Error(format!("读取文件失败: {e}")));
+                        let s = lang.strings();
+                        let _ = evt_tx.try_send(Event::Error(s.fill(
+                            s.file_read_failed_fmt,
+                            &[("e", e.to_string())],
+                        )));
                     }
                 },
                 Command::StopFile => {
@@ -288,15 +304,15 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
             if now >= p.next {
                 p.next = now + Duration::from_millis(u64::from(p.interval_ms));
                 if port.is_some() {
-                    let _ = write_all(&mut port, &evt_tx, &p.bytes);
+                    let _ = write_all(&mut port, &evt_tx, &p.bytes, lang);
                 }
             }
         }
 
         // 队列发送
-        tick_queue(&mut queue, &mut port, &evt_tx);
+        tick_queue(&mut queue, &mut port, &evt_tx, lang);
         // 文件发送
-        tick_file(&mut file, &mut port, &evt_tx);
+        tick_file(&mut file, &mut port, &evt_tx, lang);
 
         // 节流：有活跃任务时 2ms 轮询，空闲时 20ms
         if port.is_some() || queue.is_some() || file.is_some() || periodic.is_some() {
@@ -307,18 +323,26 @@ fn writer_loop(cmd_rx: Receiver<Command>, evt_tx: SyncSender<Event>) {
     }
 }
 
-fn open_serial(settings: &PortSettings) -> Result<Box<dyn serialport::SerialPort>, String> {
+fn open_serial(
+    settings: &PortSettings,
+    lang: Language,
+) -> Result<Box<dyn serialport::SerialPort>, String> {
     serialport::new(&settings.port_name, settings.baud_rate)
         .data_bits(settings.data_bits.to_serial())
-        .stop_bits(settings.stop_bits.to_serial()?)
-        .parity(settings.parity.to_serial()?)
+        .stop_bits(settings.stop_bits.to_serial(lang)?)
+        .parity(settings.parity.to_serial(lang)?)
         .flow_control(settings.flow_control.to_serial())
         .timeout(Duration::from_millis(50))
         .open()
         .map_err(|e| e.to_string())
 }
 
-fn reader_loop(mut port: Box<dyn serialport::SerialPort>, evt_tx: SyncSender<Event>, stop: Arc<AtomicBool>) {
+fn reader_loop(
+    mut port: Box<dyn serialport::SerialPort>,
+    evt_tx: SyncSender<Event>,
+    stop: Arc<AtomicBool>,
+    lang: Language,
+) {
     let mut buf = [0u8; 4096];
     const READ_BATCH_MAX: usize = 64 * 1024;
 
@@ -344,7 +368,11 @@ fn reader_loop(mut port: Box<dyn serialport::SerialPort>, evt_tx: SyncSender<Eve
             }
             Err(e) if e.kind() == io::ErrorKind::TimedOut => {}
             Err(e) => {
-                let _ = evt_tx.try_send(Event::Error(format!("读取串口失败: {e}")));
+                let s = lang.strings();
+                let _ = evt_tx.try_send(Event::Error(s.fill(
+                    s.port_read_failed_fmt,
+                    &[("e", e.to_string())],
+                )));
                 let _ = evt_tx.try_send(Event::Disconnected);
                 break;
             }
@@ -357,12 +385,13 @@ fn write_all(
     port: &mut Option<Box<dyn serialport::SerialPort>>,
     evt_tx: &SyncSender<Event>,
     bytes: &[u8],
+    lang: Language,
 ) -> bool {
     let Some(p) = port.as_mut() else {
-        let _ = evt_tx.try_send(Event::Error("串口未打开".to_string()));
+        let _ = evt_tx.try_send(Event::Error(lang.strings().port_not_open.to_string()));
         return false;
     };
-    write_all_dyn(&mut **p, evt_tx, bytes)
+    write_all_dyn(&mut **p, evt_tx, bytes, lang)
 }
 
 /// 对任意 `std::io::Write` 目标执行完整写入（用于串口写入与单元测试）。
@@ -370,6 +399,7 @@ fn write_all_dyn(
     writer: &mut dyn std::io::Write,
     evt_tx: &SyncSender<Event>,
     bytes: &[u8],
+    lang: Language,
 ) -> bool {
     // 瞬时无进展（输出缓冲满、驱动繁忙、流控暂停）时重试，避免中途误判失败。
     // 长时间（约 30 秒）无任何字节写入才放弃，防止死等。
@@ -384,9 +414,8 @@ fn write_all_dyn(
                 // 0 字节（部分写入）；稍作等待后重试，绝不在此时中止。
                 stall += 1;
                 if stall >= STALL_LIMIT {
-                    let _ = evt_tx.try_send(Event::Error(
-                        "串口写入长时间无进展，已中止（请检查波特率与流控）".to_string(),
-                    ));
+                    let _ = evt_tx
+                        .try_send(Event::Error(lang.strings().write_stalled.to_string()));
                     return false;
                 }
                 std::thread::sleep(STALL_SLEEP);
@@ -401,15 +430,18 @@ fn write_all_dyn(
             {
                 stall += 1;
                 if stall >= STALL_LIMIT {
-                    let _ = evt_tx.try_send(Event::Error(
-                        "串口写入长时间无进展，已中止（请检查波特率与流控）".to_string(),
-                    ));
+                    let _ = evt_tx
+                        .try_send(Event::Error(lang.strings().write_stalled.to_string()));
                     return false;
                 }
                 std::thread::sleep(STALL_SLEEP);
             }
             Err(e) => {
-                let _ = evt_tx.try_send(Event::Error(format!("串口写入失败: {e}")));
+                let s = lang.strings();
+                let _ = evt_tx.try_send(Event::Error(s.fill(
+                    s.write_failed_fmt,
+                    &[("e", e.to_string())],
+                )));
                 return false;
             }
         }
@@ -423,6 +455,7 @@ fn tick_queue(
     queue: &mut Option<QueueState>,
     port: &mut Option<Box<dyn serialport::SerialPort>>,
     evt_tx: &SyncSender<Event>,
+    lang: Language,
 ) {
     let Some(state) = queue else {
         return;
@@ -443,7 +476,7 @@ fn tick_queue(
 
     let item = &state.items[state.index];
     let delay = item.delay_ms;
-    if !write_all(port, evt_tx, &item.bytes) {
+    if !write_all(port, evt_tx, &item.bytes, lang) {
         *queue = None;
         let _ = evt_tx.try_send(Event::QueueStopped);
         return;
@@ -466,6 +499,7 @@ fn tick_file(
     file: &mut Option<FileState>,
     port: &mut Option<Box<dyn serialport::SerialPort>>,
     evt_tx: &SyncSender<Event>,
+    lang: Language,
 ) {
     let Some(state) = file else {
         return;
@@ -486,7 +520,7 @@ fn tick_file(
                 return;
             }
             let end = (state.pos + 4096).min(state.total);
-            if !write_all(port, evt_tx, &state.data[state.pos..end]) {
+            if !write_all(port, evt_tx, &state.data[state.pos..end], lang) {
                 *file = None;
                 let _ = evt_tx.try_send(Event::FileStopped);
                 return;
@@ -507,7 +541,7 @@ fn tick_file(
             let (start, end) = state.lines[state.line_idx];
             let mut line = state.data[start..end].to_vec();
             line.extend_from_slice(&state.line_ending);
-            if !write_all(port, evt_tx, &line) {
+            if !write_all(port, evt_tx, &line, lang) {
                 *file = None;
                 let _ = evt_tx.try_send(Event::FileStopped);
                 return;
@@ -573,7 +607,7 @@ mod tests {
             written: Vec::new(),
         };
         let data = b"hello serial world";
-        assert!(write_all_dyn(&mut w, &tx, data));
+        assert!(write_all_dyn(&mut w, &tx, data, Language::Chinese));
         assert_eq!(w.written, data);
         assert!(matches!(rx.try_recv(), Ok(Event::Tx(b)) if b == data));
     }
@@ -607,7 +641,7 @@ mod tests {
             written: Vec::new(),
         };
         let data = b"abc";
-        assert!(write_all_dyn(&mut w, &tx, data));
+        assert!(write_all_dyn(&mut w, &tx, data, Language::Chinese));
         assert_eq!(w.written, data);
     }
 }

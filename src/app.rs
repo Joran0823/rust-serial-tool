@@ -1,7 +1,8 @@
 //! 应用主状态与事件循环。
 
 use crate::config::{Config, TextEncoding};
-use crate::serial::{Event, SerialSession};
+use crate::i18n::{Language, Strings};
+use crate::serial::{Command, Event, SerialSession};
 use crate::ui::data::DisplaySeg;
 use crate::ui::theme;
 use eframe::egui;
@@ -71,10 +72,11 @@ impl SerialApp {
         setup_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx);
         let config = Config::load();
+        let s = config.language.strings();
         let baud_input = config.port.baud_rate.to_string();
 
         let mut app = Self {
-            session: SerialSession::spawn(),
+            session: SerialSession::spawn(config.language),
             last_save: Instant::now(),
             config,
             port_list: Vec::new(),
@@ -105,13 +107,27 @@ impl SerialApp {
             file_progress: None,
             queue_sending: false,
             queue_progress: None,
-            status: "就绪".to_string(),
+            status: s.status_ready.to_string(),
             status_error: false,
             alert: None,
             viewport_clamped: false,
         };
         app.refresh_ports();
         app
+    }
+
+    /// 当前语言的全部界面文案。
+    pub fn t(&self) -> &'static Strings {
+        self.config.language.strings()
+    }
+
+    /// 切换界面语言：立即生效，并同步给后台会话线程（用于错误消息）。
+    pub fn set_language(&mut self, lang: Language) {
+        if self.config.language == lang {
+            return;
+        }
+        self.config.language = lang;
+        self.session.send(Command::SetLanguage(lang));
     }
 
     pub fn set_status(&mut self, msg: String, is_error: bool) {
@@ -140,17 +156,21 @@ impl SerialApp {
             Event::Opened { port_name } => {
                 self.session_connected = true;
                 self.connected_port = port_name.clone();
-                self.set_status(format!("已连接 {port_name}"), false);
+                self.set_status(
+                    self.t()
+                        .fill(self.t().status_connected_fmt, &[("port", port_name)]),
+                    false,
+                );
             }
             Event::Closed => {
                 self.session_connected = false;
                 self.connected_port.clear();
-                self.set_status("已断开".to_string(), false);
+                self.set_status(self.t().status_disconnected.to_string(), false);
             }
             Event::Disconnected => {
                 self.session_connected = false;
                 self.connected_port.clear();
-                self.set_status("串口已断开，请检查设备连接".to_string(), true);
+                self.set_status(self.t().status_disconnected_error.to_string(), true);
                 self.refresh_ports();
             }
             Event::Error(msg) => self.set_status(msg, true),
@@ -169,7 +189,13 @@ impl SerialApp {
             Event::QueueStarted { name, total } => {
                 self.queue_sending = true;
                 self.queue_progress = Some((0, total));
-                self.set_status(format!("队列「{name}」开始发送，共 {total} 条"), false);
+                self.set_status(
+                    self.t().fill(
+                        self.t().queue_started_fmt,
+                        &[("name", name), ("total", total.to_string())],
+                    ),
+                    false,
+                );
             }
             Event::QueueProgress { current, total } => {
                 self.queue_progress = Some((current, total));
@@ -177,17 +203,23 @@ impl SerialApp {
             Event::QueueDone => {
                 self.queue_sending = false;
                 self.queue_progress = None;
-                self.set_status("队列发送完成".to_string(), false);
+                self.set_status(self.t().queue_done.to_string(), false);
             }
             Event::QueueStopped => {
                 self.queue_sending = false;
                 self.queue_progress = None;
-                self.set_status("队列发送已停止".to_string(), false);
+                self.set_status(self.t().queue_stopped.to_string(), false);
             }
             Event::FileStarted { name, total } => {
                 self.file_send_active = true;
                 self.file_progress = Some((0, total));
-                self.set_status(format!("开始发送文件 {name}（{total} 字节）"), false);
+                self.set_status(
+                    self.t().fill(
+                        self.t().file_started_fmt,
+                        &[("name", name), ("total", total.to_string())],
+                    ),
+                    false,
+                );
             }
             Event::FileProgress { sent, total } => {
                 self.file_progress = Some((sent, total));
@@ -195,12 +227,12 @@ impl SerialApp {
             Event::FileDone => {
                 self.file_send_active = false;
                 self.file_progress = None;
-                self.set_status("文件发送完成".to_string(), false);
+                self.set_status(self.t().file_done.to_string(), false);
             }
             Event::FileStopped => {
                 self.file_send_active = false;
                 self.file_progress = None;
-                self.set_status("文件发送已取消".to_string(), false);
+                self.set_status(self.t().file_cancelled.to_string(), false);
             }
         }
     }
@@ -363,13 +395,13 @@ impl eframe::App for SerialApp {
 
         // 警告弹窗（如队列全部为空）
         if let Some(msg) = self.alert.clone() {
-            egui::Window::new("提示")
+            egui::Window::new(self.t().alert_title)
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
                     ui.label(msg);
-                    if ui.button("确定").clicked() {
+                    if ui.button(self.t().ok).clicked() {
                         self.alert = None;
                     }
                 });

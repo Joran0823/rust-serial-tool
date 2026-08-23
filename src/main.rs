@@ -5,6 +5,7 @@
 mod app;
 mod codec;
 mod config;
+mod i18n;
 mod queue_file;
 mod serial;
 mod ui;
@@ -13,11 +14,15 @@ mod util;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    let lang = config::Config::load().language;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!("串口调试助手 {}", app_version::APP_VERSION))
+            .with_title(
+                lang.strings()
+                    .fill(lang.strings().app_title, &[("version", app_version::APP_VERSION.to_string())]),
+            )
             .with_inner_size([1100.0, 740.0])
-            .with_min_inner_size([900.0, 560.0])
+            .with_min_inner_size([1100.0, 560.0])
             .with_icon(load_icon()),
         ..Default::default()
     };

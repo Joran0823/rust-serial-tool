@@ -31,6 +31,7 @@ pub struct DisplaySeg {
 impl SerialApp {
     /// 布局2-子2：接收区（内容填充、宽高自适应、无边框），只读文本框 + 符合只读样式的浅灰背景。
     pub fn receive_area(&mut self, ui: &mut egui::Ui) {
+        let s = self.t();
         self.refresh_display_cache();
 
         // 右键菜单“全选”：egui 的 Label 选区没有公开的设置接口，且点击菜单项会触发
@@ -47,19 +48,19 @@ impl SerialApp {
 
         if self.display_dropped > 0 {
             ui.label(
-                egui::RichText::new(format!(
-                    "（显示缓冲已满，丢弃 {} 字节）",
-                    self.display_dropped
+                egui::RichText::new(s.fill(
+                    s.display_dropped,
+                    &[("n", self.display_dropped.to_string())],
                 ))
                 .small()
                 .color(theme::TEXT_SOFT),
             );
         }
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("接收区").strong());
+            ui.label(egui::RichText::new(s.receive_area).strong());
             if !self.config.show_sent_data {
                 ui.label(
-                    egui::RichText::new("（未显示发送数据）")
+                    egui::RichText::new(s.not_showing_sent)
                         .small()
                         .color(theme::TEXT_SOFT),
                 );
@@ -80,7 +81,7 @@ impl SerialApp {
                         if self.display_cache.is_empty() {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new("暂无数据…").color(theme::TEXT_SOFT),
+                                    egui::RichText::new(s.receive_empty).color(theme::TEXT_SOFT),
                                 )
                                 .halign(egui::Align::Min),
                             );
@@ -112,11 +113,11 @@ impl SerialApp {
                             }
                             // 只读展示区右键菜单：全选 + 复制（无粘贴）
                             resp.context_menu(|ui| {
-                                if ui.selectable_label(false, "全选").clicked() {
+                                if ui.selectable_label(false, s.select_all).clicked() {
                                     ui.ctx().data_mut(|d| d.insert_temp(select_all_id, true));
                                     ui.close();
                                 }
-                                if ui.selectable_label(false, "复制").clicked() {
+                                if ui.selectable_label(false, s.copy).clicked() {
                                     ui.ctx().copy_text(self.display_cache.clone());
                                     ui.close();
                                 }
@@ -325,12 +326,13 @@ mod tests {
     use super::*;
     use crate::app::SerialApp;
     use crate::config::Config;
+    use crate::i18n::Language;
     use crate::serial::SerialSession;
     use std::time::Instant;
 
     fn make_app() -> SerialApp {
         SerialApp {
-            session: SerialSession::spawn(),
+            session: SerialSession::spawn(Language::Chinese),
             config: Config::default(),
             last_save: Instant::now(),
             port_list: Vec::new(),
