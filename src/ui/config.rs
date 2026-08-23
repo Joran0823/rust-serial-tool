@@ -912,6 +912,9 @@ mod tests {
     fn file_panel_layout_keeps_all_controls() {
         let ctx = cjk_ctx();
         let mut app = make_app();
+        // Config::default() 按系统语言初始化，CI（en-US）下会渲染英文，
+        // 必须显式指定语言，断言才与渲染内容一致。
+        app.config.language = Language::Chinese;
         let output = ctx.run_ui(Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
@@ -946,6 +949,7 @@ mod tests {
     fn file_panel_button_shows_selected_file_name() {
         let ctx = cjk_ctx();
         let mut app = make_app();
+        app.config.language = Language::Chinese;
         // 使用平台无关的相对路径：Windows 上为 data\test.bin，
         // macOS/Linux 上为 data/test.bin，两者 file_name() 都返回 test.bin。
         app.pending_file = Some(std::path::Path::new("data").join("test.bin"));
@@ -967,6 +971,7 @@ mod tests {
     fn file_panel_shows_progress_bar_while_sending() {
         let ctx = cjk_ctx();
         let mut app = make_app();
+        app.config.language = Language::Chinese;
         app.file_send_active = true;
         app.file_progress = Some((50, 100));
         let output = ctx.run_ui(Default::default(), |ui| {
