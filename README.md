@@ -18,7 +18,55 @@
 
 ## 构建
 
-需要 Rust 工具链（stable）。
+### 1. 安装 Rust 工具链
+
+需要 stable 版 Rust，推荐通过 [rustup](https://rustup.rs) 安装（默认安装的就是 stable 工具链）：
+
+- **Windows**：下载并运行 [rustup-init.exe](https://rustup.rs)，按提示安装；也可用 winget：`winget install Rustlang.Rustup`
+- **Linux**：`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+### 2. 安装系统构建依赖
+
+#### Windows
+
+Windows 上不需要额外安装系统库，但 Rust 的 MSVC 工具链在编译时需要 Visual Studio 的 C++ 构建工具：
+
+1. 安装 [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/zh-hans/downloads/#build-tools-for-visual-studio-2022)（或完整版 Visual Studio）；
+2. 勾选“**使用 C++ 的桌面开发**”工作负载（包含 MSVC 编译器与 Windows SDK）。
+
+也可用 winget 命令行安装（等价于勾选上述工作负载）：
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+> 建议使用默认的 MSVC 工具链。Windows 下 `build.rs` 会通过 MSVC 资源编译器嵌入应用图标与版本信息。
+
+#### Linux
+
+Ubuntu / Debian：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libudev-dev \
+    libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+    libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libwayland-dev \
+    libvulkan-dev libssl-dev
+```
+
+Fedora / RHEL 系：
+
+```bash
+sudo dnf install -y gcc gcc-c++ make pkgconf-pkg-config systemd-devel \
+    libxcb-devel libxkbcommon-devel libX11-devel libXrandr-devel libXi-devel \
+    wayland-devel vulkan-loader-devel openssl-devel
+```
+
+> 其他发行版请安装对应的开发包：pkg-config、libudev（udev 头文件）、X11/Wayland、Vulkan 与 OpenSSL。这些依赖来自 eframe/winit（GUI 窗口）与 serialport（串口枚举）。
+
+> 提示：Linux 下访问串口通常需要把当前用户加入 `dialout` 组并重新登录后生效：`sudo usermod -aG dialout $USER`
+
+### 3. 构建
 
 ```bash
 # 开发版
