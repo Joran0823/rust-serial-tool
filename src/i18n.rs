@@ -232,6 +232,7 @@ pub struct Strings {
     pub hex_missing_digits_fmt: &'static str,
     pub hex_odd_length_fmt: &'static str,
     pub hex_invalid_char_fmt: &'static str,
+    pub panels_hidden: &'static str,
 }
 
 impl Strings {
@@ -425,6 +426,7 @@ pub const ZH: Strings = Strings {
     hex_missing_digits_fmt: "{tok}: 缺少十六进制数字",
     hex_odd_length_fmt: "{tok}: 奇数个十六进制字符",
     hex_invalid_char_fmt: "{tok}: 包含非法十六进制字符",
+    panels_hidden: "所有面板均已收起，点击按钮恢复：",
 };
 
 /// 英文文案。
@@ -607,6 +609,7 @@ pub const EN: Strings = Strings {
     hex_missing_digits_fmt: "{tok}: missing hex digits",
     hex_odd_length_fmt: "{tok}: odd number of hex characters",
     hex_invalid_char_fmt: "{tok}: contains invalid hex characters",
+    panels_hidden: "All panels are hidden. Click a button to restore:",
 };
 
 #[cfg(test)]

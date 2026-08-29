@@ -6,9 +6,61 @@ use crate::serial::{Command, Event, SerialSession};
 use crate::ui::data::DisplaySeg;
 use crate::ui::theme;
 use eframe::egui;
+use egui_dock::{DockArea, DockState, Node, NodeIndex, NodePath, Style, TabViewer};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// “发送文件”面板正文的固定高度：控件行 33px + 上下内边距。
+const FILE_BODY_H: f32 = 50.0;
+
+/// 可停靠面板：接收区 / 发送区 / 文件发送 / 队列。
+///
+/// 每个面板在 [`DockState`] 中是一个 tab，支持拖动、拆分、关闭（收起）与恢复。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiPanel {
+    Receive,
+    Send,
+    File,
+    Queue,
+}
+
+impl UiPanel {
+    /// 全部面板，顺序即默认 tab 顺序。
+    pub const ALL: [UiPanel; 4] = [
+        UiPanel::Receive,
+        UiPanel::Send,
+        UiPanel::File,
+        UiPanel::Queue,
+    ];
+
+    /// 当前语言下的面板标题。
+    pub fn title(self, s: &Strings) -> &'static str {
+        match self {
+            UiPanel::Receive => s.receive_area,
+            UiPanel::Send => s.send,
+            UiPanel::File => s.send_file,
+            UiPanel::Queue => s.queue,
+        }
+    }
+}
+
+/// 默认停靠布局：沿用原有纵向堆叠的观感（接收区在上，发送/文件/队列在下），
+/// 每个区域独立成一块，可拖动、拆分、关闭与恢复。
+fn default_dock_state() -> DockState<UiPanel> {
+    let mut dock = DockState::new(vec![UiPanel::Receive]);
+    let root = NodeIndex::root();
+    let [_, send] = dock
+        .main_surface_mut()
+        .split_below(root, 0.49, vec![UiPanel::Send]);
+    let [_, file] = dock
+        .main_surface_mut()
+        .split_below(send, 0.41, vec![UiPanel::File]);
+    let [_, _queue] = dock
+        .main_surface_mut()
+        .split_below(file, 0.19, vec![UiPanel::Queue]);
+    dock
+}
 
 pub struct SerialApp {
     pub session: SerialSession,
@@ -65,6 +117,9 @@ pub struct SerialApp {
     pub alert: Option<String>,
     /// 首次启动是否已做过窗口屏幕内钳制
     pub viewport_clamped: bool,
+    /// 停靠布局状态：四个区域以 tab 形式停靠，可拖动/拆分/关闭（收起）与恢复。
+    /// 用 Option 包一层，便于每帧取出后与 `SerialApp` 的其余部分解耦借用。
+    pub dock_state: Option<DockState<UiPanel>>,
 }
 
 impl SerialApp {
@@ -111,6 +166,7 @@ impl SerialApp {
             status_error: false,
             alert: None,
             viewport_clamped: false,
+            dock_state: Some(default_dock_state()),
         };
         app.refresh_ports();
         app
@@ -133,6 +189,39 @@ impl SerialApp {
     pub fn set_status(&mut self, msg: String, is_error: bool) {
         self.status = msg;
         self.status_error = is_error;
+    }
+
+    /// 渲染指定停靠面板的正文内容。
+    pub fn panel_ui(&mut self, ui: &mut egui::Ui, panel: UiPanel) {
+        match panel {
+            UiPanel::Receive => {
+                // 设置行固定高度，接收区填充剩余空间
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 34.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.receive_settings_row(ui),
+                );
+                ui.add_space(8.0);
+                self.receive_area(ui);
+            }
+            UiPanel::Send => {
+                // 输入框填充剩余空间，按钮行固定在底部
+                let input_h = (ui.available_height() - 44.0 - 6.0).max(40.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), input_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.send_input_box(ui),
+                );
+                ui.add_space(6.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 44.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.send_buttons_row(ui),
+                );
+            }
+            UiPanel::File => self.file_panel(ui),
+            UiPanel::Queue => self.queue_panel(ui),
+        }
     }
 
     /// 处理事件队列，每帧最多处理 64 条，避免单帧解码过量数据导致卡顿。
@@ -329,69 +418,58 @@ impl eframe::App for SerialApp {
                 self.status_bar(ui);
             });
 
-        // 主布局：5 个 layout 纵向堆叠，每个横向填满 parent、内边距统一（8px），
-        // 布局之间以分割线分隔；仅布局5-子2（队列条目）支持纵向滚动
+        // 主布局：四个区域以停靠 tab 呈现，可拖动、拆分、关闭（收起）与恢复。
+        // 先取出 dock_state，使 viewer 可以独占借用 self，渲染结束后再放回。
+        let mut dock = self.dock_state.take().expect("dock_state 应始终存在");
+        let open_panels = current_open_panels(&dock);
+        let mut viewer = DockViewer {
+            app: self,
+            open_panels,
+            pending_restore: None,
+        };
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::PANEL))
             .show(ui, |ui| {
-                const PAD: f32 = 8.0; // 统一内边距
-                const SEP: f32 = 8.0; // 分割线高度
-                const GAP: f32 = 8.0;
-                let total = ui.available_height();
-                let settings_h = 34.0;     // 布局2-子1：设置行（容纳 32px 按钮）
-                let send_input_h = 96.0;   // 布局3-子1：发送文本框
-                let send_buttons_h = 44.0; // 布局3-子2：按钮行 + 运行状态
-                let file_h = 40.0;         // 布局4：文件发送行
-                let queue_h = 170.0;       // 布局5：队列
-                let fixed = settings_h
-                    + GAP
-                    + send_input_h
-                    + 6.0
-                    + send_buttons_h
-                    + file_h
-                    + queue_h
-                    + PAD * 8.0
-                    + SEP * 4.0;
-                let rx_h = (total - fixed).max(40.0);
-
-                // 布局1 与 布局2 之间的分割线
-                ui.separator();
-
-                // 布局2（纵向）：子1 设置行 + 子2 接收区
-                padded(ui, settings_h + GAP + rx_h + PAD * 2.0, |ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), settings_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.receive_settings_row(ui),
+                if dock.main_surface().is_empty() {
+                    // 全部面板都已收起：显示恢复入口
+                    restore_panels_ui(ui, viewer.app, &mut dock);
+                } else {
+                    // “发送文件”面板固定为仅容纳内容的高度，不随窗口缩放
+                    let style = Style::from_egui(ui.style());
+                    fix_file_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + FILE_BODY_H,
                     );
-                    ui.add_space(GAP);
-                    self.receive_area(ui);
-                });
-                ui.separator();
-
-                // 布局3（纵向）：子1 发送文本框 + 子2 按钮行
-                padded(ui, send_input_h + 6.0 + send_buttons_h + PAD * 2.0, |ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), send_input_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.send_input_box(ui),
-                    );
-                    ui.add_space(6.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), send_buttons_h),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.send_buttons_row(ui),
-                    );
-                });
-                ui.separator();
-
-                // 布局4（横向、高度固定、宽度自适应）：文件发送
-                padded(ui, file_h + PAD * 2.0, |ui| self.file_panel(ui));
-                ui.separator();
-
-                // 布局5（纵向，子布局无边框）：队列（仅其条目列表支持纵向滚动）
-                padded(ui, queue_h + PAD * 2.0, |ui| self.queue_panel(ui));
+                    DockArea::new(&mut dock)
+                        .style(style)
+                        .show_add_buttons(true)
+                        .show_add_popup(true)
+                        // 面板用“折叠/展开”按钮收起布局，避免关闭后需通过 + 菜单才能找回
+                        .show_close_buttons(false)
+                        .show_leaf_collapse_buttons(true)
+                        .show_leaf_close_all_buttons(false)
+                        .show_secondary_button_hint(false)
+                        .tab_context_menus(false)
+                        .show_inside(ui, &mut viewer);
+                }
             });
+        if let Some(panel) = viewer.pending_restore.take() {
+            let (panel, node) = panel;
+            let restored = dock
+                .main_surface_mut()
+                .leaf_mut(node)
+                .is_ok_and(|leaf| {
+                    leaf.append_tab(panel);
+                    true
+                });
+            if !restored {
+                // 该分组已被移除（如同一帧内被关闭），退回第一个分组
+                dock.main_surface_mut().push_to_first_leaf(panel);
+            }
+        }
+        let app = viewer.app;
+        app.dock_state = Some(dock);
 
         // 警告弹窗（如队列全部为空）
         if let Some(msg) = self.alert.clone() {
@@ -419,18 +497,138 @@ impl Drop for SerialApp {
     }
 }
 
-/// 统一内边距（8px）的分区容器，用于布局1~5，保证视觉一致。
-fn padded<R>(
+/// DockArea 的 TabViewer：渲染期间独占持有 `SerialApp` 的可变引用，
+/// 并通过快照与挂起动作实现“关闭后从 + 菜单恢复面板”。
+struct DockViewer<'a> {
+    app: &'a mut SerialApp,
+    /// 本帧开始时各面板是否处于打开状态（按 [`UiPanel::ALL`] 顺序）。
+    open_panels: [bool; 4],
+    /// “+” 菜单中点击待恢复的面板及其所属分组，渲染结束后应用到 dock_state。
+    pending_restore: Option<(UiPanel, NodeIndex)>,
+}
+
+impl TabViewer for DockViewer<'_> {
+    type Tab = UiPanel;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        tab.title(self.app.t()).into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        self.app.panel_ui(ui, *tab);
+    }
+
+    /// “+” 按钮弹出的面板列表：已打开的面板置灰，收起的面板可点击恢复。
+    fn add_popup(&mut self, ui: &mut egui::Ui, path: NodePath) {
+        let s = self.app.t();
+        for (i, panel) in UiPanel::ALL.into_iter().enumerate() {
+            if self.open_panels[i] {
+                ui.add_enabled(false, egui::Button::new(panel.title(s)));
+            } else if ui.button(panel.title(s)).clicked() {
+                self.pending_restore = Some((panel, path.node));
+                ui.close();
+            }
+        }
+    }
+}
+
+/// 统计当前处于打开状态的面板（仅统计主 surface，窗口 surface 暂不参与恢复管理）。
+fn current_open_panels(dock: &DockState<UiPanel>) -> [bool; 4] {
+    let mut open = [false; 4];
+    for tab in dock.main_surface().tabs() {
+        match tab {
+            UiPanel::Receive => open[0] = true,
+            UiPanel::Send => open[1] = true,
+            UiPanel::File => open[2] = true,
+            UiPanel::Queue => open[3] = true,
+        }
+    }
+    open
+}
+
+/// 计算某个节点在给定总高度下实际分到的高度（按各层纵向拆分的 fraction 累乘）。
+/// 水平拆分不改变高度，直接继承父节点高度。
+fn node_height(dock: &DockState<UiPanel>, node: NodeIndex, total_h: f32) -> f32 {
+    if node == NodeIndex::root() {
+        return total_h;
+    }
+    let parent = node.parent().expect("非根节点必有父节点");
+    let parent_h = node_height(dock, parent, total_h);
+    let Node::Vertical(split) = &dock.main_surface()[parent] else {
+        return parent_h;
+    };
+    if node == parent.left() {
+        parent_h * split.fraction
+    } else {
+        parent_h * (1.0 - split.fraction)
+    }
+}
+
+/// 将“发送文件”面板固定为仅容纳内容的高度。
+///
+/// 仅在其独立成块（leaf 中只有 File 一个 tab）且父级是纵向拆分时生效，
+/// 其余布局（合并成 tab 组、横向并排等）交给用户自由调整。
+fn fix_file_panel_height(
+    dock: &mut DockState<UiPanel>,
+    total_h: f32,
+    file_total_h: f32,
+) {
+    let Some((file_node, _)) = dock.main_surface().find_tab(&UiPanel::File) else {
+        return;
+    };
+    if dock
+        .main_surface()
+        .leaf(file_node)
+        .map_or(true, |leaf| leaf.tabs().len() != 1)
+    {
+        return;
+    }
+    let Some(parent) = file_node.parent() else {
+        return;
+    };
+    let parent_h = node_height(dock, parent, total_h);
+    match &dock.main_surface()[parent] {
+        Node::Vertical(_) => {}
+        _ => return,
+    }
+    if parent_h <= 0.0 {
+        return;
+    }
+
+    // File 是父拆分的左（上）子节点时，fraction 即其占比；右（下）子节点时取补集
+    let target = (file_total_h / parent_h).clamp(0.05, 0.95);
+    let target = if file_node == parent.left() {
+        target
+    } else {
+        1.0 - target
+    };
+    if let Node::Vertical(split) = &mut dock.main_surface_mut()[parent] {
+        split.fraction = target;
+    }
+}
+
+/// 全部面板都已收起时的空布局：居中展示各面板按钮，点击即恢复。
+fn restore_panels_ui(
     ui: &mut egui::Ui,
-    height: f32,
-    add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), height),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| egui::Frame::new().inner_margin(egui::Margin::same(8)).show(ui, add_contents).inner,
-    )
-    .inner
+    app: &SerialApp,
+    dock: &mut DockState<UiPanel>,
+) {
+    let s = app.t();
+    ui.vertical_centered(|ui| {
+        ui.add_space(24.0);
+        ui.label(egui::RichText::new(s.panels_hidden).color(theme::TEXT_SOFT));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            for panel in UiPanel::ALL {
+                if ui
+                    .add_sized([110.0, 32.0], egui::Button::new(panel.title(s)))
+                    .clicked()
+                {
+                    dock.main_surface_mut().push_to_first_leaf(panel);
+                }
+            }
+        });
+    });
 }
 
 fn setup_fonts(ctx: &egui::Context) {
@@ -448,4 +646,56 @@ fn setup_fonts(ctx: &egui::Context) {
         list.push("cjk".to_owned());
     }
     ctx.set_fonts(fonts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_dock_state_contains_all_panels() {
+        let dock = default_dock_state();
+        let tabs: Vec<UiPanel> = dock.main_surface().tabs().copied().collect();
+        assert_eq!(tabs.len(), 4);
+        for panel in UiPanel::ALL {
+            assert!(tabs.contains(&panel));
+        }
+    }
+
+    #[test]
+    fn open_panels_snapshot_tracks_closed_tabs() {
+        let mut dock = default_dock_state();
+        assert!(current_open_panels(&dock).iter().all(|&open| open));
+
+        let path = dock.main_surface().find_tab(&UiPanel::Queue).unwrap();
+        dock.main_surface_mut().remove_tab(path);
+
+        let open = current_open_panels(&dock);
+        assert!(!open[3]);
+        assert!(open[0] && open[1] && open[2]);
+    }
+
+    #[test]
+    fn all_closed_then_restore_creates_leaf_again() {
+        let mut dock = default_dock_state();
+        for panel in UiPanel::ALL {
+            let path = dock.main_surface().find_tab(&panel).unwrap();
+            dock.main_surface_mut().remove_tab(path);
+        }
+        assert!(dock.main_surface().is_empty());
+
+        dock.main_surface_mut().push_to_first_leaf(UiPanel::Receive);
+        assert_eq!(dock.main_surface().num_tabs(), 1);
+    }
+
+    #[test]
+    fn file_panel_height_is_fixed_to_content() {
+        let mut dock = default_dock_state();
+        let total_h = 700.0;
+        fix_file_panel_height(&mut dock, total_h, 74.0);
+
+        let (file_node, _) = dock.main_surface().find_tab(&UiPanel::File).unwrap();
+        let h = node_height(&dock, file_node, total_h);
+        assert!((h - 74.0).abs() < 0.01);
+    }
 }

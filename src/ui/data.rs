@@ -324,10 +324,11 @@ fn stream_decode(dec: &mut encoding_rs::Decoder, bytes: &[u8], last: bool) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::SerialApp;
+    use crate::app::{SerialApp, UiPanel};
     use crate::config::Config;
     use crate::i18n::Language;
     use crate::serial::SerialSession;
+    use egui_dock::DockState;
     use std::time::Instant;
 
     fn make_app() -> SerialApp {
@@ -367,6 +368,7 @@ mod tests {
             status_error: false,
             alert: None,
             viewport_clamped: false,
+            dock_state: Some(DockState::new(UiPanel::ALL.to_vec())),
         }
     }
 

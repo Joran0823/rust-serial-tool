@@ -724,10 +724,11 @@ fn open_log_folder_path(path: Option<&std::path::Path>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::SerialApp;
+    use crate::app::{SerialApp, UiPanel};
     use crate::config::Config;
     use crate::i18n::Language;
     use crate::serial::SerialSession;
+    use egui_dock::DockState;
     use std::sync::Arc;
     use std::time::Instant;
 
@@ -768,6 +769,7 @@ mod tests {
             status_error: false,
             alert: None,
             viewport_clamped: false,
+            dock_state: Some(DockState::new(UiPanel::ALL.to_vec())),
         }
     }
 
