@@ -303,12 +303,6 @@ impl SendQueue {
     }
 }
 
-impl Default for SendQueue {
-    fn default() -> Self {
-        Self::new("队列 1")
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub port: PortSettings,
@@ -334,9 +328,10 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let language = Language::system();
         Self {
             port: PortSettings::default(),
-            language: Language::system(),
+            language,
             display_mode: DisplayMode::Text,
             text_encoding: TextEncoding::Utf8,
             autoscroll: true,
@@ -346,7 +341,7 @@ impl Default for Config {
             periodic_interval_ms: 1000,
             file_mode: FileSendMode::WholeFile,
             file_line_interval_ms: 100,
-            queues: vec![SendQueue::default()],
+            queues: vec![SendQueue::new(default_queue_name(language))],
             selected_queue: 0,
             max_queue_items: 200,
             auto_refresh_ports: true,
@@ -360,6 +355,15 @@ fn default_true() -> bool {
 
 fn default_language() -> Language {
     Language::system()
+}
+
+/// 旧版本（V1.1.2 及更早）硬编码的默认队列名。
+const LEGACY_DEFAULT_QUEUE_NAME: &str = "队列 1";
+
+/// 按语言生成默认队列名，与界面“新建队列”按钮的命名一致。
+fn default_queue_name(lang: Language) -> String {
+    lang.strings()
+        .fill(lang.strings().queue_new_name, &[("n", "1".to_string())])
 }
 
 impl Config {
@@ -376,9 +380,7 @@ impl Config {
         match std::fs::read_to_string(&path) {
             Ok(s) => match toml::from_str::<Config>(&s) {
                 Ok(mut c) => {
-                    if c.queues.is_empty() {
-                        c.queues.push(SendQueue::default());
-                    }
+                    c.normalize_queues();
                     c.selected_queue = c.selected_queue.min(c.queues.len() - 1);
                     c.max_queue_items = c.max_queue_items.clamp(1, 1000);
                     c
@@ -386,6 +388,29 @@ impl Config {
                 Err(_) => Self::default(),
             },
             Err(_) => Self::default(),
+        }
+    }
+
+    /// 队列兜底与迁移：
+    /// - 没有任何队列时按当前语言创建默认队列；
+    /// - 旧版默认队列名是硬编码中文“队列 1”，英文界面下会显得界面语言混杂
+    ///   （issue #6）。仅当队列仍未被使用（所有条目内容为空）时才改名为
+    ///   当前语言的默认名，避免改动用户自定义数据。
+    fn normalize_queues(&mut self) {
+        if self.queues.is_empty() {
+            self.queues
+                .push(SendQueue::new(default_queue_name(self.language)));
+            return;
+        }
+        if self.language != Language::Chinese {
+            let default_name = default_queue_name(self.language);
+            for q in &mut self.queues {
+                if q.name == LEGACY_DEFAULT_QUEUE_NAME
+                    && q.items.iter().all(|i| i.content.trim().is_empty())
+                {
+                    q.name = default_name.clone();
+                }
+            }
         }
     }
 
@@ -421,5 +446,61 @@ mod tests {
     fn default_line_ending_is_none() {
         assert_eq!(Config::default().line_ending, LineEnding::None);
         assert_eq!(LineEnding::default(), LineEnding::None);
+    }
+
+    #[test]
+    fn default_queue_name_is_localized() {
+        assert_eq!(default_queue_name(Language::Chinese), "队列 1");
+        assert_eq!(default_queue_name(Language::English), "Queue 1");
+    }
+
+    #[test]
+    fn empty_queues_get_localized_default_on_load() {
+        let mut c = Config {
+            language: Language::English,
+            queues: Vec::new(),
+            ..Config::default()
+        };
+        c.normalize_queues();
+        assert_eq!(c.queues.len(), 1);
+        assert_eq!(c.queues[0].name, "Queue 1");
+    }
+
+    #[test]
+    fn legacy_default_queue_is_renamed_for_english_ui() {
+        // 旧版默认队列（中文“队列 1” + 空条目）在英文界面下自动改为本地化默认名
+        let mut c = Config {
+            language: Language::English,
+            queues: vec![SendQueue::new("队列 1")],
+            ..Config::default()
+        };
+        c.normalize_queues();
+        assert_eq!(c.queues[0].name, "Queue 1");
+    }
+
+    #[test]
+    fn user_defined_queue_is_not_renamed() {
+        // 队列名恰好等于旧默认名但已有内容时不迁移
+        let mut q = SendQueue::new("队列 1");
+        q.items[0].content = "hello".to_string();
+        let mut c = Config {
+            language: Language::English,
+            queues: vec![q],
+            ..Config::default()
+        };
+        c.normalize_queues();
+        assert_eq!(c.queues[0].name, "队列 1");
+    }
+
+    #[test]
+    fn legacy_default_queue_kept_for_chinese_ui() {
+        // 中文界面下旧默认名无需改动
+        let mut c = Config {
+            language: Language::Chinese,
+            queues: vec![SendQueue::new("队列 1")],
+            ..Config::default()
+        };
+        c.normalize_queues();
+        assert_eq!(c.queues[0].name, "队列 1");
     }
 }
