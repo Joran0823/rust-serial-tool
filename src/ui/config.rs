@@ -369,6 +369,10 @@ impl SerialApp {
 const FIELD_INNER: f32 = 6.0;
 
 /// 字段子布局：自动宽 label + 下拉框（基础宽度 12，内部按文本自适应扩展）。
+///
+/// egui_flex 的 flex 容器使用 `Align::Min`（顶部对齐），`add_ui` 里的子 Ui 会继承，
+/// 导致矮的 label 与高的下拉框顶部对齐、视觉偏上。这里强制 `Align::Center`
+/// 让 label 与下拉框在同一行内垂直居中。
 #[allow(clippy::too_many_arguments)]
 fn field_ui(
     ui: &mut egui::Ui,
@@ -378,9 +382,11 @@ fn field_ui(
     tip: &str,
     options: impl FnOnce(&mut egui::Ui),
 ) {
-    ui.label(egui::RichText::new(label).color(theme::text_soft()))
-        .on_hover_text(tip);
-    widgets::combo(ui, 12.0, 28.0, enabled, selected, tip, options);
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(label).color(theme::text_soft()))
+            .on_hover_text(tip);
+        widgets::combo(ui, 12.0, 28.0, enabled, selected, tip, options);
+    });
 }
 
 /// 端口显示名：优先 USB 产品名/制造商；无名称时直接显示端口名（不在尾部追加 COMx）。
