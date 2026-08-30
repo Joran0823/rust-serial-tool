@@ -26,10 +26,39 @@ impl SerialApp {
         let flex = egui_flex::Flex::horizontal()
             .wrap(true)
             .gap(egui::vec2(GAP, 4.0));
+
+        // 语言/主题/打开串口三个按钮固定为统一宽度：取“打开串口/Open Port/关闭串口/Close Port”
+        // 中英文里最宽的文本，加上按钮水平内边距（style 中 button_padding.x=14 ×2）。
+        // 这样无论中英文界面、是否已连接，三个按钮都等宽且文本完整显示。
+        let btn_font = egui::TextStyle::Button.resolve(ui.style());
+        let measure = |t: &str| {
+            ui.ctx().fonts_mut(|f| {
+                f.layout_no_wrap(
+                    t.to_owned(),
+                    btn_font.clone(),
+                    egui::Color32::PLACEHOLDER,
+                )
+                .size()
+                .x
+            })
+        };
+        const BTN_PADDING_X: f32 = 28.0; // button_padding.x(14) × 2
+        let wide = [
+            Language::Chinese.strings().open_port,
+            Language::English.strings().open_port,
+            Language::Chinese.strings().close_port,
+            Language::English.strings().close_port,
+        ]
+        .into_iter()
+        .map(measure)
+        .fold(0.0_f32, f32::max);
+        let btn_w = wide + BTN_PADDING_X;
+        let btn_item = || egui_flex::item().min_size(egui::vec2(btn_w, 28.0));
+
         flex.show(ui, |flex| {
-            // 最左侧：语言按钮（自动尺寸）
+            // 最左侧：语言按钮（固定宽度）
             let lang_btn = flex
-                .add(egui_flex::item(), theme::secondary_widget(s.language))
+                .add(btn_item(), theme::secondary_widget(s.language))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.language_tip);
             egui::Popup::menu(&lang_btn).show(|ui| {
@@ -44,9 +73,9 @@ impl SerialApp {
                 }
             });
 
-            // 主题按钮（自动尺寸）
+            // 主题按钮（固定宽度）
             let theme_btn = flex
-                .add(egui_flex::item(), theme::secondary_widget(s.theme))
+                .add(btn_item(), theme::secondary_widget(s.theme))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.theme_tip);
             egui::Popup::menu(&theme_btn).show(|ui| {
@@ -70,14 +99,14 @@ impl SerialApp {
                 }
             });
 
-            // 打开/关闭串口（自动尺寸）
+            // 打开/关闭串口（固定宽度，与其他两个按钮等宽）
             let label = if self.session_connected {
                 s.close_port
             } else {
                 s.open_port
             };
             if flex
-                .add(egui_flex::item(), theme::primary_widget(label))
+                .add(btn_item(), theme::primary_widget(label))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.open_close_tip)
                 .clicked()
