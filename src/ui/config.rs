@@ -1,4 +1,4 @@
-﻿//! 顶部配置区：串口配置（横向分布、填满窗口，含打开/关闭串口、语言、主题）。
+//! 顶部配置区：串口配置（横向分布、填满窗口，含打开/关闭串口、语言、主题）。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版，800×700 单栏布局）。
 
 use crate::app::SerialApp;
@@ -12,323 +12,24 @@ use crate::ui::theme;
 use eframe::egui;
 
 impl SerialApp {
-    /// 串口配置区：6 个字段子布局 + “打开串口”/“语言”按钮，
-    /// 以相同间距横向铺满窗口；端口下拉框自适应吸收剩余宽度。
+    /// 串口配置区：语言/主题/打开串口按钮 + 端口/波特率/数据位/停止位/校验位/流控，
+    /// 以自动尺寸横向流式排布。
     pub fn config_panel(&mut self, ui: &mut egui::Ui) {
         let s = self.t();
         let enabled = !self.session_connected;
-        let avail = ui.available_width();
-        const GAP: f32 = 8.0; // 8 个单元之间的外部间距
-        const DATA_W: f32 = 52.0;
-        const STOP_W: f32 = 66.0;
-        const PARITY_W: f32 = 74.0;
-        const FLOW_W: f32 = 84.0;
-        const BAUD_FRAME_W: f32 = 88.0; // 波特率输入框（含边框与内部边距）总宽
+        const GAP: f32 = 8.0; // 控件之间的外部间距
+        // 仅波特率文本框与下拉箭头需要固定尺寸，其余控件均为自动尺寸
+        const BAUD_W: f32 = 88.0; // 波特率输入框（含边框与内部边距）总宽
         const BAUD_MARGIN_X: f32 = 8.0; // 输入框内部左右边距（4+4）
         const ARROW_W: f32 = 20.0;
-        const BTN_W: f32 = 88.0;
-        const LANG_W: f32 = 80.0;
-        const THEME_W: f32 = 80.0;
-        const PORT_MIN_COMBO_W: f32 = 100.0;
-        const PORT_GROWTH: f32 = 0.20; // 窗口变宽时端口最多再增加初始宽度的 20%
-        const PORT_HEADROOM: f32 = 30.0; // 端口初始宽度预留余量，保证语言按钮完整显示
-        /// 标准窗口（1100px）下的面板可用宽度，用于计算端口下拉框的基准宽度
-        const AVAIL_REF: f32 = 1200.0;
 
-        // 测量标签文字宽度：端口按英文宽度固定，其余取中英文最大宽度
-        let measure = |ui: &mut egui::Ui, text: &str| -> f32 {
-            let font_id = ui.style().text_styles[&egui::TextStyle::Body].clone();
-            ui.fonts_mut(|f| {
-                f.layout_no_wrap(text.to_owned(), font_id, egui::Color32::WHITE)
-            })
-            .size()
-            .x
-        };
-        let en = Language::English.strings();
-        let port_label_w = measure(ui, en.port);
-        let baud_label_w = measure(ui, s.baud_rate).max(measure(ui, en.baud_rate));
-        let data_label_w = measure(ui, s.data_bits).max(measure(ui, en.data_bits));
-        let stop_label_w = measure(ui, s.stop_bits).max(measure(ui, en.stop_bits));
-        let parity_label_w = measure(ui, s.parity).max(measure(ui, en.parity));
-        let flow_label_w = measure(ui, s.flow_control).max(measure(ui, en.flow_control));
-
-        let baud_field_w = baud_label_w + FIELD_INNER + BAUD_FRAME_W;
-        let data_field_w = data_label_w + FIELD_INNER + DATA_W;
-        let stop_field_w = stop_label_w + FIELD_INNER + STOP_W;
-        let parity_field_w = parity_label_w + FIELD_INNER + PARITY_W;
-        let flow_field_w = flow_label_w + FIELD_INNER + FLOW_W;
-        let fixed_units = baud_field_w
-            + data_field_w
-            + stop_field_w
-            + parity_field_w
-            + flow_field_w
-            + BTN_W
-            + LANG_W
-            + THEME_W;
-        // 端口下拉框：初始宽度按标准窗口计算，控件间隔固定；
-        // 窗口变宽时端口最多再增加初始宽度的 20%，其余空间留在行尾
-
-        // 计算端口显示文本宽度，确保下拉框宽度足够显示完整串口名
-        let port_text = if self.config.port.port_name.is_empty() {
-            s.port_placeholder.to_string()
-        } else {
-            self.port_list
-                .iter()
-                .find(|(_, n)| n == &self.config.port.port_name)
-                .map(|(d, _)| d.clone())
-                .unwrap_or_else(|| self.config.port.port_name.clone())
-        };
-        let port_text_w = measure(ui, &port_text);
-        let port_min_w = (PORT_MIN_COMBO_W).max(port_text_w + 8.0 + 26.0 + 4.0);
-
-        let port_base_w = (AVAIL_REF
-            - fixed_units
-            - 8.0 * GAP
-            - (port_label_w + FIELD_INNER)
-            - PORT_HEADROOM)
-            .max(port_min_w);
-        let port_max_w = port_base_w * (1.0 + PORT_GROWTH);
-        let extra = (avail - AVAIL_REF).max(0.0);
-        let mut port_combo_w = (port_base_w + extra).min(port_max_w);
-        // 兜底：窗口过窄时收缩端口宽度
-        let overflow = fixed_units + port_label_w + FIELD_INNER + port_combo_w + 8.0 * GAP - avail;
-        if overflow > 0.0 {
-            port_combo_w = (port_combo_w - overflow).max(port_min_w);
-        }
-
-        ui.spacing_mut().item_spacing = egui::vec2(GAP, 2.0);
-        ui.horizontal_wrapped(|ui| {
-            // 子布局1：端口（label 固定，下拉框自适应）
-            ui.allocate_ui_with_layout(
-                egui::vec2(port_label_w + FIELD_INNER + port_combo_w, 28.0),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.spacing_mut().item_spacing.x = FIELD_INNER;
-                    ui.add_sized(
-                        [port_label_w, 28.0],
-                        egui::Label::new(s.port).halign(egui::Align::Min),
-                    )
-                    .on_hover_text(s.port_tip);
-                    let port = if self.config.port.port_name.is_empty() {
-                        s.port_placeholder.to_string()
-                    } else {
-                        self.port_list
-                            .iter()
-                            .find(|(_, n)| n == &self.config.port.port_name)
-                            .map(|(d, _)| d.clone())
-                            .unwrap_or_else(|| self.config.port.port_name.clone())
-                    };
-                    widgets::combo(
-                        ui,
-                        ui.available_width(),
-                        28.0,
-                        enabled,
-                        port,
-                        s.port_tip,
-                        |ui| {
-                            for (display, name) in &self.port_list {
-                                ui.selectable_value(
-                                    &mut self.config.port.port_name,
-                                    name.clone(),
-                                    display,
-                                );
-                            }
-                        },
-                    );
-                },
-            );
-
-            // 子布局2：波特率（label 固定；文本框自适应 + 固定宽下拉按钮）
-            ui.allocate_ui_with_layout(
-                egui::vec2(baud_field_w, 28.0),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.spacing_mut().item_spacing.x = FIELD_INNER;
-                    ui.add_sized(
-                        [baud_label_w, 28.0],
-                        egui::Label::new(s.baud_rate).halign(egui::Align::Min),
-                    )
-                    .on_hover_text(s.baud_rate_tip);
-                    let text_w =
-                        (BAUD_FRAME_W - BAUD_MARGIN_X - ARROW_W - FIELD_INNER).max(40.0);
-                    let mut arrow_resp = None;
-                    egui::Frame::new()
-                        .fill(theme::input_bg())
-                        .stroke(theme::border())
-                        .corner_radius(4)
-                        .inner_margin(egui::Margin::symmetric(4, 1))
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.x = FIELD_INNER;
-                            let mut baud = self.baud_input.clone();
-                            let edit = ui.add_sized([text_w, 26.0],
-                                egui::TextEdit::singleline(&mut baud)
-                                    .font(egui::TextStyle::Monospace)
-                                    .frame(egui::Frame::NONE)
-                                    .background_color(egui::Color32::TRANSPARENT)
-                                    .margin(egui::vec2(4.0, 0.0)),
-                            );
-                            if edit.changed() {
-                                self.baud_input = baud;
-                                if let Ok(v) = self.baud_input.trim().parse::<u32>() {
-                                    self.config.port.baud_rate = v;
-                                }
-                            }
-                            widgets::text_edit_context_menu(
-                                ui,
-                                &edit,
-                                true,
-                                &self.baud_input,
-                                self.t(),
-                            );
-                            edit.on_hover_text(s.baud_rate);
-                            let arrow = ui
-                                .add_sized(
-                                    [ARROW_W, 26.0],
-                                    egui::Button::new("")
-                                        .fill(egui::Color32::TRANSPARENT)
-                                        .stroke(egui::Stroke::NONE),
-                                )
-                                .on_hover_text(s.common_bauds);
-                            if ui.is_rect_visible(arrow.rect) {
-                                let tri = egui::Rect::from_center_size(
-                                    arrow.rect.center(),
-                                    egui::vec2(6.0, 4.0),
-                                );
-                                ui.painter().add(egui::Shape::convex_polygon(
-                                    vec![tri.left_top(), tri.right_top(), tri.center_bottom()],
-                                    theme::text_soft(),
-                                    egui::Stroke::NONE,
-                                ));
-                            }
-                            arrow_resp = Some(arrow);
-                        });
-                    if let Some(arrow) = arrow_resp {
-                        egui::Popup::menu(&arrow).show(|ui| {
-                        for rate in [
-                            9600u32, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
-                            1_000_000, 2_000_000,
-                        ] {
-                            if ui
-                                .selectable_label(
-                                    self.config.port.baud_rate == rate,
-                                    rate.to_string(),
-                                )
-                                .clicked()
-                            {
-                                self.baud_input = rate.to_string();
-                                self.config.port.baud_rate = rate;
-                                ui.close();
-                            }
-                        }
-                        });
-                    }
-                },
-            );
-
-            // 子布局3~6：数据位 / 停止位 / 校验位 / 流控（label 与下拉框宽度均固定）
-            field_ui(
-                ui,
-                s.data_bits,
-                data_label_w,
-                DATA_W,
-                enabled,
-                self.config.port.data_bits.label().to_string(),
-                s.data_bits_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.port.data_bits, DataBits::Five, "5");
-                    ui.selectable_value(&mut self.config.port.data_bits, DataBits::Six, "6");
-                    ui.selectable_value(&mut self.config.port.data_bits, DataBits::Seven, "7");
-                    ui.selectable_value(&mut self.config.port.data_bits, DataBits::Eight, "8");
-                },
-            );
-            field_ui(
-                ui,
-                s.stop_bits,
-                stop_label_w,
-                STOP_W,
-                enabled,
-                self.config.port.stop_bits.label().to_string(),
-                s.stop_bits_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.port.stop_bits, StopBits::One, "1");
-                    ui.selectable_value(
-                        &mut self.config.port.stop_bits,
-                        StopBits::OnePointFive,
-                        "1.5",
-                    );
-                    ui.selectable_value(&mut self.config.port.stop_bits, StopBits::Two, "2");
-                },
-            );
-            field_ui(
-                ui,
-                s.parity,
-                parity_label_w,
-                PARITY_W,
-                enabled,
-                self.config.port.parity.label().to_string(),
-                s.parity_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.port.parity, Parity::None, "None");
-                    ui.selectable_value(&mut self.config.port.parity, Parity::Even, "Even");
-                    ui.selectable_value(&mut self.config.port.parity, Parity::Odd, "Odd");
-                    ui.selectable_value(&mut self.config.port.parity, Parity::Mark, "Mark");
-                    ui.selectable_value(&mut self.config.port.parity, Parity::Space, "Space");
-                },
-            );
-            let flow = match self.config.port.flow_control {
-                FlowControl::None => s.flow_none,
-                FlowControl::Software => s.flow_software,
-                FlowControl::Hardware => s.flow_hardware,
-            };
-            field_ui(
-                ui,
-                s.flow_control,
-                flow_label_w,
-                FLOW_W,
-                enabled,
-                flow.to_string(),
-                s.flow_tip,
-                |ui| {
-                    ui.selectable_value(
-                        &mut self.config.port.flow_control,
-                        FlowControl::None,
-                        s.flow_none,
-                    );
-                    ui.selectable_value(
-                        &mut self.config.port.flow_control,
-                        FlowControl::Software,
-                        s.flow_software,
-                    );
-                    ui.selectable_value(
-                        &mut self.config.port.flow_control,
-                        FlowControl::Hardware,
-                        s.flow_hardware,
-                    );
-                },
-            );
-
-            // 打开/关闭串口
-            let label = if self.session_connected {
-                s.close_port
-            } else {
-                s.open_port
-            };
-            if ui
-                .add_sized([BTN_W, 30.0], theme::primary_widget(label))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.open_close_tip)
-                .clicked()
-            {
-                if self.session_connected {
-                    self.session.send(Command::Close);
-                } else {
-                    self.open_port();
-                }
-            }
-
-            // 最右：语言按钮（固定宽度，高度与“打开串口”按钮一致）
-            let lang_btn = ui
-                .add_sized([LANG_W, 30.0], theme::secondary_widget(s.language))
+        let flex = egui_flex::Flex::horizontal()
+            .wrap(true)
+            .gap(egui::vec2(GAP, 4.0));
+        flex.show(ui, |flex| {
+            // 最左侧：语言按钮（自动尺寸）
+            let lang_btn = flex
+                .add(egui_flex::item(), theme::secondary_widget(s.language))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.language_tip);
             egui::Popup::menu(&lang_btn).show(|ui| {
@@ -342,9 +43,10 @@ impl SerialApp {
                     }
                 }
             });
-            // 主题按钮（固定宽度，高度与打开串口按钮一致）
-            let theme_btn = ui
-                .add_sized([THEME_W, 30.0], theme::secondary_widget(s.theme))
+
+            // 主题按钮（自动尺寸）
+            let theme_btn = flex
+                .add(egui_flex::item(), theme::secondary_widget(s.theme))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.theme_tip);
             egui::Popup::menu(&theme_btn).show(|ui| {
@@ -366,6 +68,223 @@ impl SerialApp {
                         ui.close();
                     }
                 }
+            });
+
+            // 打开/关闭串口（自动尺寸）
+            let label = if self.session_connected {
+                s.close_port
+            } else {
+                s.open_port
+            };
+            if flex
+                .add(egui_flex::item(), theme::primary_widget(label))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.open_close_tip)
+                .clicked()
+            {
+                if self.session_connected {
+                    self.session.send(Command::Close);
+                } else {
+                    self.open_port();
+                }
+            }
+
+            // 端口：自动刷新复选框（含 label）+ 下拉框按文本自适应宽度，
+            // 两者合为一个 flex 实体：空间不足时整体换行，不拆开。
+            flex.add_ui(egui_flex::item(), |ui| {
+                ui.checkbox(&mut self.config.auto_refresh_ports, s.auto_refresh)
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(s.auto_refresh_tip);
+                let port = if self.config.port.port_name.is_empty() {
+                    s.port_placeholder.to_string()
+                } else {
+                    self.port_list
+                        .iter()
+                        .find(|(_, n)| n == &self.config.port.port_name)
+                        .map(|(d, _)| d.clone())
+                        .unwrap_or_else(|| self.config.port.port_name.clone())
+                };
+                widgets::combo(
+                    ui,
+                    12.0,
+                    28.0,
+                    enabled,
+                    port,
+                    s.port_tip,
+                    |ui| {
+                        for (display, name) in &self.port_list {
+                            ui.selectable_value(
+                                &mut self.config.port.port_name,
+                                name.clone(),
+                                display,
+                            );
+                        }
+                    },
+                );
+            });
+
+            // 波特率：label 自动宽度；文本框自适应 + 固定宽下拉按钮。
+            // 整个组合（label+文本框+箭头）作为一个 flex 实体，不拆开。
+            flex.add_ui(egui_flex::item(), |ui| {
+                ui.label(egui::RichText::new(s.baud_rate).color(theme::text_soft()))
+                    .on_hover_text(s.baud_rate_tip);
+                {
+                    let mut arrow_resp = None;
+                egui::Frame::new()
+                    .fill(theme::input_bg())
+                    .stroke(theme::border())
+                    .corner_radius(4)
+                    .inner_margin(egui::Margin::symmetric(4, 1))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.x = FIELD_INNER;
+                        let text_w =
+                            (BAUD_W - BAUD_MARGIN_X - ARROW_W - FIELD_INNER).max(40.0);
+                        let mut baud = self.baud_input.clone();
+                        let edit = ui.add_sized([text_w, 26.0],
+                            egui::TextEdit::singleline(&mut baud)
+                                .font(egui::TextStyle::Monospace)
+                                .frame(egui::Frame::NONE)
+                                .background_color(egui::Color32::TRANSPARENT)
+                                .margin(egui::vec2(4.0, 0.0)),
+                        );
+                        if edit.changed() {
+                            self.baud_input = baud;
+                            if let Ok(v) = self.baud_input.trim().parse::<u32>() {
+                                self.config.port.baud_rate = v;
+                            }
+                        }
+                        widgets::text_edit_context_menu(
+                            ui,
+                            &edit,
+                            true,
+                            &self.baud_input,
+                            self.t(),
+                        );
+                        edit.on_hover_text(s.baud_rate);
+                        let arrow = ui
+                            .add_sized(
+                                [ARROW_W, 26.0],
+                                egui::Button::new("")
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE),
+                            )
+                            .on_hover_text(s.common_bauds);
+                        if ui.is_rect_visible(arrow.rect) {
+                            let tri = egui::Rect::from_center_size(
+                                arrow.rect.center(),
+                                egui::vec2(6.0, 4.0),
+                            );
+                            ui.painter().add(egui::Shape::convex_polygon(
+                                vec![tri.left_top(), tri.right_top(), tri.center_bottom()],
+                                theme::text_soft(),
+                                egui::Stroke::NONE,
+                            ));
+                        }
+                        arrow_resp = Some(arrow);
+                    });
+                if let Some(arrow) = arrow_resp {
+                    egui::Popup::menu(&arrow).show(|ui| {
+                    for rate in [
+                        9600u32, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
+                        1_000_000, 2_000_000,
+                    ] {
+                        if ui
+                            .selectable_label(
+                                self.config.port.baud_rate == rate,
+                                rate.to_string(),
+                            )
+                            .clicked()
+                        {
+                            self.baud_input = rate.to_string();
+                            self.config.port.baud_rate = rate;
+                            ui.close();
+                        }
+                    }
+                    });
+                }
+            }
+            });
+
+            // 数据位 / 停止位 / 校验位 / 流控（label 与下拉框每个组合是一个 flex 实体）
+            flex.add_ui(egui_flex::item(), |ui| {
+                field_ui(
+                    ui,
+                    s.data_bits,
+                    enabled,
+                    self.config.port.data_bits.label().to_string(),
+                    s.data_bits_tip,
+                    |ui| {
+                        ui.selectable_value(&mut self.config.port.data_bits, DataBits::Five, "5");
+                        ui.selectable_value(&mut self.config.port.data_bits, DataBits::Six, "6");
+                        ui.selectable_value(&mut self.config.port.data_bits, DataBits::Seven, "7");
+                        ui.selectable_value(&mut self.config.port.data_bits, DataBits::Eight, "8");
+                    },
+                );
+            });
+            flex.add_ui(egui_flex::item(), |ui| {
+                field_ui(
+                    ui,
+                    s.stop_bits,
+                    enabled,
+                    self.config.port.stop_bits.label().to_string(),
+                    s.stop_bits_tip,
+                    |ui| {
+                        ui.selectable_value(&mut self.config.port.stop_bits, StopBits::One, "1");
+                        ui.selectable_value(
+                            &mut self.config.port.stop_bits,
+                            StopBits::OnePointFive,
+                            "1.5",
+                        );
+                        ui.selectable_value(&mut self.config.port.stop_bits, StopBits::Two, "2");
+                    },
+                );
+            });
+            flex.add_ui(egui_flex::item(), |ui| {
+                field_ui(
+                    ui,
+                    s.parity,
+                    enabled,
+                    self.config.port.parity.label().to_string(),
+                    s.parity_tip,
+                    |ui| {
+                        ui.selectable_value(&mut self.config.port.parity, Parity::None, "None");
+                        ui.selectable_value(&mut self.config.port.parity, Parity::Even, "Even");
+                        ui.selectable_value(&mut self.config.port.parity, Parity::Odd, "Odd");
+                        ui.selectable_value(&mut self.config.port.parity, Parity::Mark, "Mark");
+                        ui.selectable_value(&mut self.config.port.parity, Parity::Space, "Space");
+                    },
+                );
+            });
+            let flow = match self.config.port.flow_control {
+                FlowControl::None => s.flow_none,
+                FlowControl::Software => s.flow_software,
+                FlowControl::Hardware => s.flow_hardware,
+            };
+            flex.add_ui(egui_flex::item(), |ui| {
+                field_ui(
+                    ui,
+                    s.flow_control,
+                    enabled,
+                    flow.to_string(),
+                    s.flow_tip,
+                    |ui| {
+                        ui.selectable_value(
+                            &mut self.config.port.flow_control,
+                            FlowControl::None,
+                            s.flow_none,
+                        );
+                        ui.selectable_value(
+                            &mut self.config.port.flow_control,
+                            FlowControl::Software,
+                            s.flow_software,
+                        );
+                        ui.selectable_value(
+                            &mut self.config.port.flow_control,
+                            FlowControl::Hardware,
+                            s.flow_hardware,
+                        );
+                    },
+                );
             });
         });
     }
@@ -420,31 +339,19 @@ impl SerialApp {
 /// 字段内部 label 与控件之间的间距。
 const FIELD_INNER: f32 = 6.0;
 
-/// 固定宽度字段子布局：固定宽 label + 固定宽下拉框（数据位/停止位/校验位/流控）。
+/// 字段子布局：自动宽 label + 下拉框（基础宽度 12，内部按文本自适应扩展）。
 #[allow(clippy::too_many_arguments)]
 fn field_ui(
     ui: &mut egui::Ui,
     label: &str,
-    label_w: f32,
-    combo_w: f32,
     enabled: bool,
     selected: String,
     tip: &str,
     options: impl FnOnce(&mut egui::Ui),
 ) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(label_w + FIELD_INNER + combo_w, 28.0),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.spacing_mut().item_spacing.x = FIELD_INNER;
-            ui.add_sized(
-                [label_w, 28.0],
-                egui::Label::new(label).halign(egui::Align::Min),
-            )
-            .on_hover_text(tip);
-            widgets::combo(ui, combo_w, 28.0, enabled, selected, tip, options);
-        },
-    );
+    ui.label(egui::RichText::new(label).color(theme::text_soft()))
+        .on_hover_text(tip);
+    widgets::combo(ui, 12.0, 28.0, enabled, selected, tip, options);
 }
 
 /// 端口显示名：优先 USB 产品名/制造商；无名称时直接显示端口名（不在尾部追加 COMx）。
@@ -526,6 +433,18 @@ mod tests {
         }
     }
 
+    /// 运行一帧 UI。egui 0.36 起 `FullOutput` 携带纹理增量，测试不渲染到屏幕，
+    /// 必须先 `clear()`，否则丢弃时触发 epaint 的 panic 检查。
+    fn run_ui(
+        ctx: &eframe::egui::Context,
+        input: eframe::egui::RawInput,
+        f: impl FnMut(&mut eframe::egui::Ui),
+    ) -> eframe::egui::FullOutput {
+        let mut out = ctx.run_ui(input, f);
+        out.textures_delta.clear();
+        out
+    }
+
     /// 与应用启动时一致的 Context：默认字体 + CJK 字体优先。
     /// 渲染测试必须使用真实字体，否则中文文本在无 CJK 字体的环境中
     /// （如 CI 的 macOS/Windows runner）渲染结果会不一致。
@@ -545,15 +464,76 @@ mod tests {
         ctx
     }
 
-    /// 收集渲染输出中所有文本及其 x 位置。
+    /// 收集渲染输出中所有文本及其 x 位置与绘制宽度。
+    ///
+    /// 在换行布局（`horizontal_wrapped`）下，egui 0.35 的 `Label` 会把
+    /// “距行首的缩进”放进 `LayoutSection::leading_space`，最终体现在首个
+    /// glyph 的 `pos.x` 偏移上，而 `Shape::Text.pos.x` 恒为行首 0。
+    /// 因此真实绘制位置 = shape.pos + row.pos + 首个 glyph.pos，
+    /// 宽度取所有 glyph advance_width 之和（galley.rect.width 含缩进不可用）。
     fn text_positions(output: &eframe::egui::FullOutput) -> Vec<(String, f32, f32)> {
         let mut out = Vec::new();
         for clipped in &output.shapes {
             if let eframe::egui::epaint::Shape::Text(ts) = &clipped.shape {
-                out.push((ts.galley.job.text.clone(), ts.pos.x, ts.galley.rect.width()));
+                let galley = &ts.galley;
+                if let Some(row) = galley.rows.first() {
+                    let glyph_x = row.glyphs.first().map_or(0.0, |g| g.pos.x);
+                    let x = ts.pos.x + row.pos.x + glyph_x;
+                    let w = row.glyphs.iter().map(|g| g.advance_width).sum::<f32>();
+                    out.push((galley.job.text.clone(), x, w));
+                }
             }
         }
         out
+    }
+
+    #[test]
+    fn config_panel_wraps_to_second_row_narrow_window() {
+        let ctx = cjk_ctx();
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        // 模拟 500px 窗口：控件会换到第二行
+        let output = run_ui(&ctx, Default::default(), |ui| {
+            ui.allocate_ui_with_layout(
+                eframe::egui::vec2(500.0, 96.0),
+                eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
+                |ui| app.config_panel(ui),
+            );
+        });
+        let s = Language::Chinese.strings();
+        let positions = text_positions(&output);
+        let find = |label: &str| {
+            positions
+                .iter()
+                .find(|(t, _, _)| t == label)
+                .unwrap_or_else(|| panic!("缺少控件文本: {label}"))
+        };
+        // 所有控件必须完整落在行内（右缘不超过面板宽度）
+        for (t, x, w) in &positions {
+            assert!(
+                x + w <= 500.0,
+                "控件被挤出: {t} x={x} w={w} (行宽 500)"
+            );
+        }
+        // 语言按钮仍应在行首：其按钮矩形左缘从行首开始（文本因按钮内边距略偏移）
+        let first_rect_left = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| {
+                if let eframe::egui::epaint::Shape::Rect(rs) = &clipped.shape {
+                    Some(rs.rect.left())
+                } else {
+                    None
+                }
+            })
+            .fold(f32::MAX, f32::min);
+        assert!(
+            first_rect_left < 1.0,
+            "语言按钮未从行首开始: rect_left={first_rect_left}",
+        );
+        // 自动刷新复选框应落到第一行或换行后第二行，且完整落在行内
+        let (_, port_x, port_w) = *find(s.auto_refresh);
+        assert!(port_x + port_w <= 500.0, "自动刷新被挤出: x={port_x} w={port_w}");
     }
 
     #[test]
@@ -563,7 +543,7 @@ mod tests {
         for lang in [Language::Chinese, Language::English] {
             let mut app = make_app();
             app.config.language = lang;
-            let output = ctx.run_ui(Default::default(), |ui| {
+            let output = run_ui(&ctx, Default::default(), |ui| {
                 // 模拟 1100px 窗口内的顶部面板（1100 - 左右边距 16）
                 ui.allocate_ui_with_layout(
                     eframe::egui::vec2(1200.0, 48.0),
@@ -579,17 +559,17 @@ mod tests {
                     .find(|(t, _, _)| t == label)
                     .unwrap_or_else(|| panic!("缺少控件文本: {label}"))
             };
-            // 从左到右的顺序：端口 < 波特率 < 数据位 < 停止位 < 校验位 < 流控 < 打开串口 < 语言 < 主题
+            // 从左到右的顺序：语言 < 主题 < 打开串口 < 自动刷新 < 波特率 < 数据位 < 停止位 < 校验位 < 流控
             let order = [
-                find(s.port).1,
+                find(s.language).1,
+                find(s.theme).1,
+                find(s.open_port).1,
+                find(s.auto_refresh).1,
                 find(s.baud_rate).1,
                 find(s.data_bits).1,
                 find(s.stop_bits).1,
                 find(s.parity).1,
                 find(s.flow_control).1,
-                find(s.open_port).1,
-                find(s.language).1,
-                find(s.theme).1,
             ];
             for w in order.windows(2) {
                 assert!(
@@ -599,28 +579,28 @@ mod tests {
                     w[1]
                 );
             }
-            // 主题按钮必须完整落在行内（文本右缘不超过面板宽度）
-            let (_, x, w) = *find(s.theme);
+            // 所有控件必须完整落在行内（右缘不超过面板宽度）
+            for (t, x, w) in &positions {
+                assert!(
+                    x + w <= 1200.0,
+                    "[{lang:?}] 控件被挤出: {t} x={x} w={w} (行宽 1200)"
+                );
+            }
+            // 语言按钮位于行首：其按钮矩形左缘从行首开始（文本因按钮内边距略偏移）
+            let first_rect_left = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| {
+                    if let eframe::egui::epaint::Shape::Rect(rs) = &clipped.shape {
+                        Some(rs.rect.left())
+                    } else {
+                        None
+                    }
+                })
+                .fold(f32::MAX, f32::min);
             assert!(
-                x + w <= 1200.0,
-                "[{lang:?}] 主题按钮被挤出: x={x} w={w} (行宽 1200)"
-            );
-            // 整行从左到右填满：端口标签在行首，主题按钮靠近行尾
-            assert!(
-                find(s.port).1 < 1.0,
-                "[{lang:?}] 端口标签未从行首开始: x={}",
-                find(s.port).1
-            );
-            assert!(
-                x + w >= 1200.0 - 75.0,
-                "[{lang:?}] 主题按钮未靠右/整行未填满: 右缘={}",
-                x + w
-            );
-            // 端口下拉框自适应吸收剩余空间：波特率标签应被推到较靠右的位置
-            assert!(
-                find(s.baud_rate).1 > 200.0,
-                "[{lang:?}] 端口下拉框未吸收剩余宽度: 波特率标签 x={}",
-                find(s.baud_rate).1
+                first_rect_left < 1.0,
+                "[{lang:?}] 语言按钮未从行首开始: rect_left={first_rect_left}",
             );
         }
     }
@@ -639,7 +619,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let output = ctx.run_ui(input, |ui| {
+            let output = run_ui(&ctx, input, |ui| {
                 eframe::egui::Panel::top("serial_config")
                     .exact_size(48.0)
                     .frame(
@@ -671,7 +651,7 @@ mod tests {
         // Config::default() 按系统语言初始化，CI（en-US）下会渲染英文，
         // 必须显式指定语言，断言才与渲染内容一致。
         app.config.language = Language::Chinese;
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
                 eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
@@ -709,7 +689,7 @@ mod tests {
         // 使用平台无关的相对路径：Windows 上为 data\test.bin，
         // macOS/Linux 上为 data/test.bin，两者 file_name() 都返回 test.bin。
         app.pending_file = Some(std::path::Path::new("data").join("test.bin"));
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
                 eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
@@ -730,7 +710,7 @@ mod tests {
         app.config.language = Language::Chinese;
         app.file_send_active = true;
         app.file_progress = Some((50, 100));
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
                 eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),

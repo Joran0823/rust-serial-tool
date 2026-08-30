@@ -25,7 +25,7 @@ const FILE_BODY_H: f32 = 66.0;
 /// 可停靠面板：接收区 / 发送区 / 文件发送 / 队列。
 ///
 /// 每个面板在 [`DockState`] 中是一个 tab，支持拖动、拆分、关闭（收起）与恢复。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiPanel {
     Receive,
     Send,
@@ -545,6 +545,11 @@ struct DockViewer<'a> {
 impl TabViewer for DockViewer<'_> {
     type Tab = UiPanel;
 
+    /// 每个 tab 的唯一 ID（UiPanel 已实现 Hash）。
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(*tab)
+    }
+
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         tab.title(self.app.t()).into()
     }
@@ -822,6 +827,18 @@ mod tests {
         }
     }
 
+    /// 运行一帧 UI。egui 0.36 起 `FullOutput` 携带纹理增量，测试不渲染到屏幕，
+    /// 必须先 `clear()`，否则丢弃时触发 epaint 的 panic 检查。
+    fn run_ui(
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        f: impl FnMut(&mut egui::Ui),
+    ) -> egui::FullOutput {
+        let mut out = ctx.run_ui(input, f);
+        out.textures_delta.clear();
+        out
+    }
+
     #[test]
     fn default_dock_state_contains_all_panels() {
         let dock = default_dock_state();
@@ -893,7 +910,7 @@ mod tests {
             ..Default::default()
         };
         let mut tab_h = 24.0_f32;
-        let output = ctx.run_ui(input, |ui| {
+        let output = run_ui(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
                 let open_panels = current_open_panels(&dock);
@@ -1005,7 +1022,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let output = ctx.run_ui(input, |ui| {
+            let output = run_ui(&ctx, input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     ui.set_width(1084.0);
                     app.send_buttons_row(ui);
@@ -1073,7 +1090,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let output = ctx.run_ui(input, |ui| {
+            let output = run_ui(&ctx, input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     ui.set_width(1084.0);
                     app.send_buttons_row(ui);
@@ -1125,7 +1142,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let output = ctx.run_ui(input, |ui| {
+            let output = run_ui(&ctx, input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     ui.set_width(w - 16.0); // CentralPanel 默认内边距 8×2
                     app.receive_settings_row(ui);

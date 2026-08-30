@@ -55,7 +55,6 @@ pub struct Strings {
     pub status_periodic: &'static str,
 
     // 串口配置行
-    pub port: &'static str,
     pub port_placeholder: &'static str,
     pub port_tip: &'static str,
     pub baud_rate: &'static str,
@@ -269,7 +268,6 @@ pub const ZH: Strings = Strings {
     status_not_connected: "未连接",
     status_periodic: "周期发送中",
 
-    port: "端口",
     port_placeholder: "请选择",
     port_tip: "选择要连接的串口",
     baud_rate: "波特率",
@@ -465,7 +463,6 @@ pub const EN: Strings = Strings {
     status_not_connected: "Not connected",
     status_periodic: "Periodic sending",
 
-    port: "Port",
     port_placeholder: "Select",
     port_tip: "Select the serial port to connect",
     baud_rate: "Baud rate",

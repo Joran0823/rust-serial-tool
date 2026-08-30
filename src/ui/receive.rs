@@ -133,9 +133,6 @@ impl SerialApp {
             ui.checkbox(&mut self.paused, s.pause_receive)
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.pause_receive_tip);
-            ui.checkbox(&mut self.config.auto_refresh_ports, s.auto_refresh)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.auto_refresh_tip);
             ui.checkbox(&mut self.config.show_sent_data, s.show_sent)
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.show_sent_tip);
@@ -1050,6 +1047,18 @@ mod tests {
         }
     }
 
+    /// 运行一帧 UI。egui 0.36 起 `FullOutput` 携带纹理增量，测试不渲染到屏幕，
+    /// 必须先 `clear()`，否则丢弃时触发 epaint 的 panic 检查。
+    fn run_ui(
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        f: impl FnMut(&mut egui::Ui),
+    ) -> egui::FullOutput {
+        let mut out = ctx.run_ui(input, f);
+        out.textures_delta.clear();
+        out
+    }
+
     #[test]
     fn utf8_char_split_across_batches_not_corrupted() {
         // “中” 的 UTF-8 为 E4 B8 AD，分两批到达；标记插入在解码结果中，不打断字符
@@ -1137,7 +1146,7 @@ mod tests {
         // 模拟右键菜单点击“全选”后设置的标记
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(RECV_SELECT_ALL_KEY), true));
 
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             app.receive_area(ui);
         });
 
@@ -1217,7 +1226,7 @@ mod tests {
         app.terminal_input = "AT".to_string();
         app.terminal_cursor = 2;
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(400.0, 200.0),
                 egui::Layout::top_down(egui::Align::Min),
@@ -1288,7 +1297,8 @@ mod tests {
         let ctx = egui::Context::default();
 
         // 打字只进入待发送输入行，不立即发送
-        let _ = ctx.run_ui(
+        let _ = run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Text("AT".to_string())],
                 focused: true,
@@ -1300,7 +1310,8 @@ mod tests {
         assert!(app.terminal_buffer.is_empty());
 
         // 回车发送整行 + CR；自动回显时同步显示
-        let _ = ctx.run_ui(
+        let _ = run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::Enter,
@@ -1324,7 +1335,8 @@ mod tests {
         app.config.terminal_auto_echo = true;
         app.config.terminal_enter_sends = false;
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(
+        let _ = run_ui(
+            &ctx,
             egui::RawInput {
                 events: vec![
                     egui::Event::Text("A".to_string()),

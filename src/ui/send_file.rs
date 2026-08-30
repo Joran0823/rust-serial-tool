@@ -191,6 +191,18 @@ mod tests {
         }
     }
 
+    /// 运行一帧 UI。egui 0.36 起 `FullOutput` 携带纹理增量，测试不渲染到屏幕，
+    /// 必须先 `clear()`，否则丢弃时触发 epaint 的 panic 检查。
+    fn run_ui(
+        ctx: &eframe::egui::Context,
+        input: eframe::egui::RawInput,
+        f: impl FnMut(&mut eframe::egui::Ui),
+    ) -> eframe::egui::FullOutput {
+        let mut out = ctx.run_ui(input, f);
+        out.textures_delta.clear();
+        out
+    }
+
     fn cjk_ctx() -> eframe::egui::Context {
         let ctx = eframe::egui::Context::default();
         let mut fonts = eframe::egui::FontDefinitions::default();
@@ -222,7 +234,7 @@ mod tests {
         let ctx = cjk_ctx();
         let mut app = make_app();
         app.config.language = Language::Chinese;
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
                 eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
@@ -256,7 +268,7 @@ mod tests {
         let mut app = make_app();
         app.config.language = Language::Chinese;
         app.pending_file = Some(std::path::Path::new("data").join("test.bin"));
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
                 eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
@@ -277,7 +289,7 @@ mod tests {
         app.config.language = Language::Chinese;
         app.file_send_active = true;
         app.file_progress = Some((50, 100));
-        let output = ctx.run_ui(Default::default(), |ui| {
+        let output = run_ui(&ctx, Default::default(), |ui| {
             ui.allocate_ui_with_layout(
                 eframe::egui::vec2(1084.0, 40.0),
                 eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
