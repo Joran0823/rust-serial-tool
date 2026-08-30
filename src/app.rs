@@ -11,8 +11,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// “发送文件”面板正文的固定高度：控件行 33px + 上下内边距。
-const FILE_BODY_H: f32 = 50.0;
+/// “发送文件”面板正文的固定高度。
+///
+/// 控件行高 33px，加上 egui_dock 正文外框默认 8px 上下内边距后约 49px；
+/// 但 egui_dock 的 tab 正文用 `ScrollArea::new([true, true])` 渲染，
+/// 而 egui 0.35 的 ScrollArea 有 `min_scrolled_size = 64px` 的最小内容高度：
+/// 若正文高度低于 64px，内容区会被强制撑到 64px 再垂直居中，导致控件被下推、
+/// 底部超出面板被裁掉（表现为“控件贴着下边沿”）。
+/// 因此这里取 66px（略高于 64px，并留出像素取整余量），使 ScrollArea 不再撑高、
+/// 行内 `Align::Center` 才能真正垂直居中。
+const FILE_BODY_H: f32 = 66.0;
 
 /// 可停靠面板：接收区 / 发送区 / 文件发送 / 队列。
 ///
@@ -90,6 +98,20 @@ pub struct SerialApp {
     pub display_decoder: Option<encoding_rs::Decoder>,
     pub display_decoder_enc: Option<TextEncoding>,
     pub display_dropped: u64,
+
+    // 终端模式（接收区）：原始字节缓冲 + 解码文本 + 输入行
+    pub terminal_buffer: Vec<u8>,
+    pub terminal_text: String,
+    pub terminal_decoder: Option<encoding_rs::Decoder>,
+    pub terminal_decoder_enc: Option<TextEncoding>,
+    /// 终端文本缓存需要整体重建（编码/显示模式变化或缓冲被裁剪）
+    pub terminal_cache_invalid: bool,
+    /// 已解码进 terminal_text 的缓冲字节数
+    pub terminal_decoded_len: usize,
+    pub terminal_input: String,
+    /// 待发送输入行中的光标位置（字符下标）
+    pub terminal_cursor: usize,
+
     pub rx_total: u64,
     pub tx_total: u64,
     pub paused: bool,
@@ -125,8 +147,10 @@ pub struct SerialApp {
 impl SerialApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_fonts(&cc.egui_ctx);
-        theme::apply(&cc.egui_ctx);
         let config = Config::load();
+        let system_dark = cc.egui_ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark);
+        let is_dark = config.theme.is_dark(system_dark);
+        theme::apply_theme(&cc.egui_ctx, is_dark);
         let s = config.language.strings();
         let baud_input = config.port.baud_rate.to_string();
 
@@ -148,6 +172,14 @@ impl SerialApp {
             display_decoder: None,
             display_decoder_enc: None,
             display_dropped: 0,
+            terminal_buffer: Vec::new(),
+            terminal_text: String::new(),
+            terminal_decoder: None,
+            terminal_decoder_enc: None,
+            terminal_cache_invalid: false,
+            terminal_decoded_len: 0,
+            terminal_input: String::new(),
+            terminal_cursor: 0,
             rx_total: 0,
             tx_total: 0,
             paused: false,
@@ -195,14 +227,16 @@ impl SerialApp {
     pub fn panel_ui(&mut self, ui: &mut egui::Ui, panel: UiPanel) {
         match panel {
             UiPanel::Receive => {
-                // 设置行固定高度，接收区填充剩余空间
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 34.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| self.receive_settings_row(ui),
-                );
-                ui.add_space(8.0);
-                self.receive_area(ui);
+                // 接收区：控件行（流式换行）+ 分隔线 + 带滚动条的接收文本框
+                ui.vertical(|ui| {
+                    self.receive_settings_row(ui);
+                    ui.separator();
+                    if self.config.terminal_mode {
+                        self.terminal_area(ui);
+                    } else {
+                        self.receive_area(ui);
+                    }
+                });
             }
             UiPanel::Send => {
                 // 输入框填充剩余空间，按钮行固定在底部
@@ -396,10 +430,9 @@ impl eframe::App for SerialApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 布局1：串口配置（顶部通栏，内容横向分布、高度固定、宽度自适应）
         egui::Panel::top("serial_config")
-            .exact_size(48.0)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::PANEL)
+                    .fill(theme::panel())
                     .inner_margin(egui::Margin::same(8)),
             )
             .show(ui, |ui| {
@@ -411,7 +444,7 @@ impl eframe::App for SerialApp {
             .exact_size(24.0)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::STATUS_BG)
+                    .fill(theme::status_bg())
                     .inner_margin(egui::Margin::symmetric(10, 3)),
             )
             .show(ui, |ui| {
@@ -428,14 +461,15 @@ impl eframe::App for SerialApp {
             pending_restore: None,
         };
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::PANEL))
+            .frame(egui::Frame::new().fill(theme::panel()))
             .show(ui, |ui| {
                 if dock.main_surface().is_empty() {
                     // 全部面板都已收起：显示恢复入口
                     restore_panels_ui(ui, viewer.app, &mut dock);
                 } else {
                     // “发送文件”面板固定为仅容纳内容的高度，不随窗口缩放
-                    let style = Style::from_egui(ui.style());
+                    let style = dock_style(ui);
+                    let tab_bar_h = style.tab_bar.height;
                     fix_file_panel_height(
                         &mut dock,
                         ui.available_height(),
@@ -443,8 +477,8 @@ impl eframe::App for SerialApp {
                     );
                     DockArea::new(&mut dock)
                         .style(style)
-                        .show_add_buttons(true)
-                        .show_add_popup(true)
+                        .show_add_buttons(false)
+                        .show_add_popup(false)
                         // 面板用“折叠/展开”按钮收起布局，避免关闭后需通过 + 菜单才能找回
                         .show_close_buttons(false)
                         .show_leaf_collapse_buttons(true)
@@ -452,6 +486,7 @@ impl eframe::App for SerialApp {
                         .show_secondary_button_hint(false)
                         .tab_context_menus(false)
                         .show_inside(ui, &mut viewer);
+                    draw_collapse_icons(ui, &dock, tab_bar_h);
                 }
             });
         if let Some(panel) = viewer.pending_restore.take() {
@@ -576,11 +611,11 @@ fn fix_file_panel_height(
     let Some((file_node, _)) = dock.main_surface().find_tab(&UiPanel::File) else {
         return;
     };
-    if dock
+    let standalone = dock
         .main_surface()
         .leaf(file_node)
-        .map_or(true, |leaf| leaf.tabs().len() != 1)
-    {
+        .map_or(true, |leaf| leaf.tabs().len() != 1);
+    if standalone {
         return;
     }
     let Some(parent) = file_node.parent() else {
@@ -616,7 +651,7 @@ fn restore_panels_ui(
     let s = app.t();
     ui.vertical_centered(|ui| {
         ui.add_space(24.0);
-        ui.label(egui::RichText::new(s.panels_hidden).color(theme::TEXT_SOFT));
+        ui.label(egui::RichText::new(s.panels_hidden).color(theme::text_soft()));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             for panel in UiPanel::ALL {
@@ -648,9 +683,144 @@ fn setup_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// dock 主题：与全局深色主题一致的 tab 栏、分隔条与面板圆角。
+fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
+    let mut style = Style::from_egui(ui.style());
+    style.main_surface_border_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(8));
+    style.main_surface_border_rounding = egui::CornerRadius::same(6);
+
+    style.separator.width = 1.0;
+    style.separator.color_idle = egui::Color32::from_white_alpha(8);
+    style.separator.color_hovered = theme::BLUE_CHECK;
+    style.separator.color_dragged = theme::BLUE;
+
+    style.tab_bar.height = 30.0;
+    style.tab_bar.bg_fill = theme::panel();
+    style.tab_bar.inner_margin = egui::Margin::symmetric(8, 0);
+    style.tab_bar.corner_radius = egui::CornerRadius::same(6);
+    style.tab_bar.hline_color = egui::Color32::from_white_alpha(10);
+
+    style.tab.spacing = 8.0;
+    // tab 标题按纯文本显示：各状态透明底、无描边，仅用文字颜色区分激活态
+    let label_style = |mut s: egui_dock::TabInteractionStyle,
+                       color: egui::Color32|
+     -> egui_dock::TabInteractionStyle {
+        s.bg_fill = egui::Color32::TRANSPARENT;
+        s.outline_color = egui::Color32::TRANSPARENT;
+        s.text_color = color;
+        s.corner_radius = egui::CornerRadius::same(theme::CORNER);
+        s
+    };
+    style.tab.active = label_style(style.tab.active, theme::text());
+    style.tab.active_with_kb_focus = label_style(style.tab.active_with_kb_focus, theme::text());
+    style.tab.focused = label_style(style.tab.focused, theme::text());
+    style.tab.focused_with_kb_focus = label_style(style.tab.focused_with_kb_focus, theme::text());
+    style.tab.hovered = label_style(style.tab.hovered, theme::text());
+    style.tab.inactive = label_style(style.tab.inactive, theme::text_soft());
+    style.tab.inactive_with_kb_focus =
+        label_style(style.tab.inactive_with_kb_focus, theme::text());
+
+    style.tab.tab_body.bg_fill = theme::panel();
+    style.tab.tab_body.stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(8));
+    style.tab.tab_body.corner_radius = egui::CornerRadius::same(6);
+    style.tab.tab_body.inner_margin = egui::Margin::same(6);
+
+    // 收缩按钮：透明底、柔和箭头，悬停变蓝（图标形状由 egui_dock 内部绘制）
+    style.buttons.collapse_tabs_bg_fill = egui::Color32::TRANSPARENT;
+    style.buttons.collapse_tabs_active_color = theme::BLUE;
+    style.buttons.collapse_tabs_color = theme::text_soft();
+    style.buttons.collapse_tabs_border_color = egui::Color32::TRANSPARENT;
+
+    style.overlay.selection_color =
+        egui::Color32::from_rgba_unmultiplied(0x2E, 0x7C, 0xF6, 120);
+    style
+}
+
+/// egui_dock 内置收缩按钮是库内部画死的三角箭头，无法通过 API 替换图形；
+/// 这里在其上方覆盖绘制 “−/+” 图标，同时保留内置按钮的占位与点击逻辑。
+fn draw_collapse_icons(ui: &egui::Ui, dock: &DockState<UiPanel>, tab_bar_h: f32) {
+    const BTN_W: f32 = 24.0; // 与 egui_dock 内置收缩按钮宽度一致
+    let hover = ui.ctx().pointer_hover_pos();
+    let painter = ui.painter();
+    for (path, leaf) in dock.iter_leaves() {
+        if !path.surface.is_main() || leaf.tabs.is_empty() {
+            continue;
+        }
+        let rect = egui::Rect::from_min_size(leaf.rect.min, egui::vec2(BTN_W, tab_bar_h));
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
+            continue;
+        }
+        // 先以面板色覆盖库内置三角，再绘制加减号
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::panel());
+        let color = if hover.is_some_and(|p| rect.contains(p)) {
+            theme::BLUE
+        } else {
+            theme::text_soft()
+        };
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if leaf.collapsed { "+" } else { "−" },
+            egui::FontId::proportional(14.0),
+            color,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_app() -> SerialApp {
+        SerialApp {
+            session: SerialSession::spawn(Language::Chinese),
+            config: Config::default(),
+            last_save: Instant::now(),
+            port_list: Vec::new(),
+            auto_refresh_last: Instant::now(),
+            session_connected: false,
+            connected_port: String::new(),
+            baud_input: String::new(),
+            data_display: Vec::new(),
+            display_segments: Vec::new(),
+            display_cache: String::new(),
+            display_dirty: false,
+            display_segments_decoded: 0,
+            display_cache_invalid: false,
+            display_decoder: None,
+            display_decoder_enc: None,
+            display_dropped: 0,
+            terminal_buffer: Vec::new(),
+            terminal_text: String::new(),
+            terminal_decoder: None,
+            terminal_decoder_enc: None,
+            terminal_cache_invalid: false,
+            terminal_decoded_len: 0,
+            terminal_input: String::new(),
+            terminal_cursor: 0,
+            rx_total: 0,
+            tx_total: 0,
+            paused: false,
+            log_on: false,
+            log_path: None,
+            log_file: None,
+            send_input: String::new(),
+            send_history: Vec::new(),
+            periodic_enabled: false,
+            pending_file: None,
+            file_send_active: false,
+            file_progress: None,
+            queue_sending: false,
+            queue_progress: None,
+            status: String::new(),
+            status_error: false,
+            alert: None,
+            viewport_clamped: false,
+            dock_state: Some(default_dock_state()),
+        }
+    }
 
     #[test]
     fn default_dock_state_contains_all_panels() {
@@ -692,10 +862,288 @@ mod tests {
     fn file_panel_height_is_fixed_to_content() {
         let mut dock = default_dock_state();
         let total_h = 700.0;
-        fix_file_panel_height(&mut dock, total_h, 74.0);
+        let tab_h = 24.0;
+        fix_file_panel_height(&mut dock, total_h, tab_h + FILE_BODY_H);
 
         let (file_node, _) = dock.main_surface().find_tab(&UiPanel::File).unwrap();
         let h = node_height(&dock, file_node, total_h);
-        assert!((h - 74.0).abs() < 0.01);
+        assert!((h - (tab_h + FILE_BODY_H)).abs() < 0.01);
+        // 正文高度必须不低于 egui 0.35 ScrollArea 的最小内容高度（64px），
+        // 否则内容区被强制撑高、控件会被下推并贴到面板下边沿。
+        // 编译期不变量：正文高度必须不低于 egui 0.35 ScrollArea 的最小内容高度（64px），
+        // 否则内容区被强制撑高、控件会被下推并贴到面板下边沿。
+        const _: () = assert!(
+            FILE_BODY_H >= 64.0,
+            "FILE_BODY_H 低于 ScrollArea 最小内容高度 64px，控件无法垂直居中"
+        );
+    }
+
+    #[test]
+    fn file_panel_controls_centered_in_default_dock() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 740.0),
+            )),
+            ..Default::default()
+        };
+        let mut tab_h = 24.0_f32;
+        let output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                let open_panels = current_open_panels(&dock);
+                let mut viewer = DockViewer {
+                    app: &mut app,
+                    open_panels,
+                    pending_restore: None,
+                };
+                let style = dock_style(ui);
+                tab_h = style.tab_bar.height;
+                fix_file_panel_height(
+                    &mut dock,
+                    ui.available_height(),
+                    style.tab_bar.height + FILE_BODY_H,
+                );
+                DockArea::new(&mut dock)
+                    .style(style)
+                    .show_add_buttons(false)
+                    .show_add_popup(false)
+                    .show_close_buttons(false)
+                    .show_leaf_collapse_buttons(true)
+                    .show_leaf_close_all_buttons(false)
+                    .show_secondary_button_hint(false)
+                    .tab_context_menus(false)
+                    .show_inside(ui, &mut viewer);
+                app.dock_state = Some(dock);
+            });
+        });
+        let s = Language::Chinese.strings();
+
+        // 从形状里找出文件面板 tab 标题、队列面板 tab 标题（各自较小的 y 值），
+        // 两者之间的区域即“发送文件”面板正文（含 tab 栏下的正文区）。
+        let mut file_tab_title_top = f32::MAX;
+        let mut file_tab_title_h = 0.0_f32;
+        let mut queue_tab_title_top = f32::MAX;
+        let mut queue_tab_title_h = 0.0_f32;
+        let mut file_buttons = Vec::new();
+        for clipped in &output.shapes {
+            if let egui::epaint::Shape::Text(ts) = &clipped.shape {
+                let text = &ts.galley.job.text;
+                if text == s.send_file {
+                    if ts.pos.y < file_tab_title_top {
+                        file_tab_title_top = ts.pos.y;
+                        file_tab_title_h = ts.galley.rect.height();
+                    }
+                } else if text == s.queue && ts.pos.y < queue_tab_title_top {
+                    queue_tab_title_top = ts.pos.y;
+                    queue_tab_title_h = ts.galley.rect.height();
+                }
+            }
+        }
+        // tab 标题文字在 tab 栏内垂直居中，由文字顶端与高度反推 tab 栏范围
+        let file_tab_bar_top = file_tab_title_top - (tab_h - file_tab_title_h) / 2.0;
+        let body_top = file_tab_bar_top + tab_h;
+        let queue_tab_bar_top = queue_tab_title_top - (tab_h - queue_tab_title_h) / 2.0;
+        let body_bottom = queue_tab_bar_top;
+        let body_center = (body_top + body_bottom) / 2.0;
+
+        // 收集正文区内高度约 33px 的控件矩形（发送按钮 / 模式下拉框 / 选择文件按钮）
+        for clipped in &output.shapes {
+            let rect = match &clipped.shape {
+                egui::epaint::Shape::Rect(rs) => Some(rs.rect),
+                egui::epaint::Shape::Path(p) if !p.points.is_empty() => {
+                    Some(egui::Rect::from_points(&p.points))
+                }
+                _ => None,
+            };
+            if let Some(r) = rect
+                && (r.height() - 33.0).abs() < 4.0
+                && r.min.y >= body_top - 1.0
+                && r.max.y <= body_bottom + 1.0
+            {
+                file_buttons.push(r.center().y);
+            }
+        }
+        assert_eq!(
+            file_buttons.len(),
+            3,
+            "文件面板正文中应恰好有 3 个 33px 高控件（发送/模式/选择文件）"
+        );
+        // 正文区高度应等于 FILE_BODY_H，且不低于 ScrollArea 最小内容高度
+        let body_h = body_bottom - body_top;
+        assert!(
+            (body_h - FILE_BODY_H).abs() < 2.0,
+            "正文区高度 {body_h:.1} 与 FILE_BODY_H {FILE_BODY_H} 不符"
+        );
+        // 每个控件的垂直中心都应落在正文区中心（真正的垂直居中）
+        for center in &file_buttons {
+            assert!(
+                (center - body_center).abs() < 1.0,
+                "控件中心 y={center:.1} 未居中：正文区 {body_top:.1}..{body_bottom:.1}，中心 {body_center:.1}"
+            );
+        }
+    }
+
+    #[test]
+    fn send_row_periodic_does_not_overlap_history() {
+        // 中英文下，Send 区右侧“定时发送”组都不能左溢盖住 History 下拉框。
+        for lang in [Language::Chinese, Language::English] {
+            let ctx = egui::Context::default();
+            setup_fonts(&ctx);
+            theme::apply(&ctx);
+            let mut app = make_app();
+            app.config.language = lang;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 70.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_width(1084.0);
+                    app.send_buttons_row(ui);
+                });
+            });
+
+            // History 下拉框空内容时显示“—”，Periodic 复选框文本随语言变化
+            let periodic_text = if lang == Language::English {
+                "Periodic"
+            } else {
+                "定时发送"
+            };
+            let (mut dash_right, mut periodic_left) = (f32::MIN, f32::MAX);
+            for clipped in &output.shapes {
+                if let egui::epaint::Shape::Text(ts) = &clipped.shape {
+                    let text = &ts.galley.job.text;
+                    if text == "—" {
+                        dash_right = dash_right.max(ts.pos.x + ts.galley.rect.width());
+                    } else if text == periodic_text {
+                        periodic_left = periodic_left.min(ts.pos.x);
+                    }
+                }
+            }
+            assert!(
+                dash_right > f32::MIN && periodic_left < f32::MAX,
+                "未找到 History 下拉框或 Periodic 复选框文本（{lang:?}）"
+            );
+            // 下拉框右缘 ≈ 破折号右缘 + 左内边距 8 + 右侧箭头区 26；
+            // 复选框左缘 ≈ 文字左缘 − 复选框图标(18) − 图标间距(8)。
+            let hist_right = dash_right + 8.0 + 26.0;
+            let checkbox_left = periodic_left - 18.0 - 8.0;
+            assert!(
+                checkbox_left >= hist_right - 0.5,
+                "{lang:?} 下 Periodic 复选框盖住 History 下拉框：\
+                 checkbox_left={checkbox_left:.1} < hist_right={hist_right:.1}"
+            );
+        }
+    }
+
+    #[test]
+    fn send_row_periodic_group_vertically_centered() {
+        // 中英文下，Periodic 复选框、Interval 标签、数值框、“ms” 的文字中心必须对齐
+        // （此前 egui 的 interact_size.y=30 让复选框/数值框溢出分配高度、中心下移）。
+        for lang in [Language::Chinese, Language::English] {
+            let ctx = egui::Context::default();
+            setup_fonts(&ctx);
+            theme::apply(&ctx);
+            let mut app = make_app();
+            app.config.language = lang;
+            let periodic_text = if lang == Language::English {
+                "Periodic"
+            } else {
+                "定时发送"
+            };
+            let interval_text = if lang == Language::English {
+                "Interval"
+            } else {
+                "间隔"
+            };
+            let value_text = app.config.periodic_interval_ms.to_string();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 70.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_width(1084.0);
+                    app.send_buttons_row(ui);
+                });
+            });
+
+            let mut centers = Vec::new();
+            for clipped in &output.shapes {
+                if let egui::epaint::Shape::Text(ts) = &clipped.shape {
+                    let text = &ts.galley.job.text;
+                    if text == "ms"
+                        || text == periodic_text
+                        || text == interval_text
+                        || text == &value_text
+                    {
+                        centers.push(ts.pos.y + ts.galley.rect.height() / 2.0);
+                    }
+                }
+            }
+            assert_eq!(
+                centers.len(),
+                4,
+                "应找到 Periodic/Interval/数值框/ms 四个文字（{lang:?}）"
+            );
+            let min = centers.iter().copied().fold(f32::MAX, f32::min);
+            let max = centers.iter().copied().fold(f32::MIN, f32::max);
+            assert!(
+                max - min < 1.5,
+                "{lang:?} 下定时发送组未垂直居中：中心 y 差异 {:.1}px（{centers:?}）",
+                max - min
+            );
+        }
+    }
+
+    #[test]
+    fn receive_rows_wrap_without_horizontal_overflow() {
+        // 窄宽度 + 英文下，接收区设置行与标题行必须流式换行，不能横向溢出。
+        for lang in [Language::Chinese, Language::English] {
+            let ctx = egui::Context::default();
+            setup_fonts(&ctx);
+            theme::apply(&ctx);
+            let mut app = make_app();
+            app.config.language = lang;
+            let w = 320.0; // 较窄：英文下设置行必然换行
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(w, 260.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.set_width(w - 16.0); // CentralPanel 默认内边距 8×2
+                    app.receive_settings_row(ui);
+                    ui.add_space(8.0);
+                    app.receive_area(ui);
+                });
+            });
+            let right = w - 8.0;
+            for clipped in &output.shapes {
+                if let egui::epaint::Shape::Text(ts) = &clipped.shape {
+                    let max_x = ts.pos.x + ts.galley.rect.width();
+                    assert!(
+                        max_x <= right + 2.0,
+                        "{lang:?} 下接收区控件横向溢出：max_x={max_x:.1} > {right:.1}（文本：{}）",
+                        ts.galley.job.text
+                    );
+                }
+            }
+        }
     }
 }

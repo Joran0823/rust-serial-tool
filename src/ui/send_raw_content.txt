@@ -1,12 +1,9 @@
-//! 发送区与队列区。
-//! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的发送区与队列区。
+//! 发送区：发送文本框、按钮行、定时发送。
 
 use crate::app::SerialApp;
 use crate::codec;
-use crate::config::{LineEnding, QueueItem, SendMode, SendQueue};
-use crate::i18n::Language;
-use crate::queue_file;
-use crate::serial::{Command, QueueSendItem};
+use crate::config::{LineEnding, QueueItem, SendMode};
+use crate::serial::Command;
 use crate::ui::theme;
 use crate::ui::widgets;
 use eframe::egui;
@@ -28,30 +25,29 @@ impl SerialApp {
         widgets::text_edit_context_menu(ui, &resp, true, &self.send_input, s);
     }
 
-    /// 布局3-子2：发送按钮行（发送/清空发送/添加到队列/模式/行尾/历史/定时发送/间隔，全部垂直居中）。
+    /// 布局3-子2：发送按钮行（sub_h_layout），支持自动换行。
     pub fn send_buttons_row(&mut self, ui: &mut egui::Ui) {
         let s = self.t();
-        // 右侧“定时发送”组实际宽度（英文标签更长），据此给 History 下拉框留足空间，
-        // 避免右侧组从右往左溢出、盖住 History 下拉框。
-        let periodic_w = periodic_group_width(ui, s.interval);
-        let row_spacing = ui.spacing().item_spacing.x;
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            // 发送按钮（116px，三个按钮宽度一致）
             if ui
-                .add_sized([102.0, 32.0], theme::primary_widget(s.send))
+                .add_sized([116.0, 32.0], theme::primary_widget(s.send))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.send_tip)
                 .clicked()
             {
                 self.send_current_input();
             }
+            // 清空发送按钮（116px）
             if ui
-                .add_sized([102.0, 32.0], theme::secondary_widget(s.clear_send))
+                .add_sized([116.0, 32.0], theme::secondary_widget(s.clear_send))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(s.clear_send_tip)
                 .clicked()
             {
                 self.send_input.clear();
             }
+            // 添加到队列按钮（116px）
             if ui
                 .add_sized([116.0, 32.0], theme::secondary_widget(s.add_to_queue))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -60,80 +56,86 @@ impl SerialApp {
             {
                 self.add_current_to_queue();
             }
-            // 模式/行尾/发送历史（设计稿未绘制，但属必需功能）
-            ui.label(egui::RichText::new(s.mode).color(theme::text_soft()));
-            widgets::combo(
-                ui,
-                64.0,
-                26.0,
-                true,
-                self.config.send_mode.label(self.config.language),
-                s.mode_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.send_mode, SendMode::Text, s.text_mode);
-                    ui.selectable_value(&mut self.config.send_mode, SendMode::Hex, "HEX");
-                },
-            );
-            ui.label(egui::RichText::new(s.line_ending).color(theme::text_soft()));
-            widgets::combo(
-                ui,
-                90.0,
-                26.0,
-                true,
-                self.config.line_ending.label(self.config.language),
-                s.line_ending_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::None, s.none);
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::CR, "CR");
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::LF, "LF");
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::CRLF, "CRLF");
-                },
-            );
-            ui.label(egui::RichText::new(s.history).color(theme::text_soft()));
-            let first = self.send_history.first().cloned().unwrap_or_default();
-            // 剩余宽度减去右侧定时发送组的实际宽度后，自动分配给历史下拉框
-            let hist_w = (ui.available_width() - periodic_w - row_spacing - 4.0).max(90.0);
-            widgets::combo(
-                ui,
-                hist_w,
-                26.0,
-                true,
-                if first.is_empty() { "—".to_string() } else { first.clone() },
-                s.history_tip,
-                |ui| {
-                    for h in self.send_history.clone() {
-                        if ui.button(&h).clicked() {
-                            self.send_input = h;
-                        }
-                    }
-                },
-            );
+            // 定时发送复选框（自动大小）
+            let mut on = self.periodic_enabled;
+            if ui
+                .checkbox(&mut on, s.periodic)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.periodic_tip)
+                .changed()
+            {
+                self.toggle_periodic(on);
+            }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // 收紧组内交互控件的最小高度：egui 按 interact_size.y(30) + 按钮内边距
-                // 计算复选框/数值框的自然高度，会让它们溢出 22px 的分配区域并向下偏移，
-                // 与两侧标签错开。这里把最小高度压到 22px，与 add_sized 分配一致。
-                ui.spacing_mut().interact_size.y = 22.0;
-                ui.spacing_mut().button_padding.y = 1.0;
-                ui.label(egui::RichText::new("ms").color(theme::text_soft()));
-                let resp = ui.add_sized(
-                    [62.0, 22.0],
+            // interval_layout：间隔 + 数值框 + ms
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(s.interval).color(theme::text_soft()));
+                ui.add(
                     egui::DragValue::new(&mut self.config.periodic_interval_ms)
                         .range(10..=3_600_000),
+                )
+                .on_hover_text(s.interval_tip);
+                ui.label(egui::RichText::new("ms").color(theme::text_soft()));
+            });
+
+            // mode_layout：模式 + 下拉框（自动大小）
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(s.mode).color(theme::text_soft()));
+                widgets::combo(
+                    ui,
+                    64.0,
+                    26.0,
+                    true,
+                    self.config.send_mode.label(self.config.language),
+                    s.mode_tip,
+                    |ui| {
+                        ui.selectable_value(&mut self.config.send_mode, SendMode::Text, s.text_mode);
+                        ui.selectable_value(&mut self.config.send_mode, SendMode::Hex, "HEX");
+                    },
                 );
-                resp.on_hover_text(s.interval_tip);
-                ui.label(egui::RichText::new(s.interval).color(theme::text_soft()));
-                let mut on = self.periodic_enabled;
-                if ui
-                    .add_sized([80.0, 22.0], egui::Checkbox::new(&mut on, s.periodic))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(s.periodic_tip)
-                    .changed()
-                {
-                    self.toggle_periodic(on);
-                }
+            });
+
+            // line_end_layout：行尾 + 下拉框（自动大小）
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(s.line_ending).color(theme::text_soft()));
+                widgets::combo(
+                    ui,
+                    90.0,
+                    26.0,
+                    true,
+                    self.config.line_ending.label(self.config.language),
+                    s.line_ending_tip,
+                    |ui| {
+                        ui.selectable_value(&mut self.config.line_ending, LineEnding::None, s.none);
+                        ui.selectable_value(&mut self.config.line_ending, LineEnding::CR, "CR");
+                        ui.selectable_value(&mut self.config.line_ending, LineEnding::LF, "LF");
+                        ui.selectable_value(&mut self.config.line_ending, LineEnding::CRLF, "CRLF");
+                    },
+                );
+            });
+
+            // history_layout：历史 + 下拉框（自动大小）
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(s.history).color(theme::text_soft()));
+                let first = self.send_history.first().cloned().unwrap_or_default();
+                widgets::combo(
+                    ui,
+                    90.0,
+                    26.0,
+                    true,
+                    if first.is_empty() { "—".to_string() } else { first.clone() },
+                    s.history_tip,
+                    |ui| {
+                        for h in self.send_history.clone() {
+                            if ui.button(&h).clicked() {
+                                self.send_input = h;
+                            }
+                        }
+                    },
+                );
             });
         });
+
         if self.periodic_enabled {
             ui.label(
                 egui::RichText::new(s.periodic_running)
@@ -726,21 +728,6 @@ fn item_bytes(item: &QueueItem, le: LineEnding, lang: Language) -> Result<Vec<u8
         }
         SendMode::Hex => codec::hex::parse_hex(&item.content, lang),
     }
-}
-
-/// 右侧“定时发送”组的总宽度：Periodic 复选框(80) + 间隔标签 + 数值框(62) + “ms”标签 + 3 段控件间距。
-/// 标签宽度按当前语言的字体实际测量，避免英文下预留不足导致控件重叠。
-pub(crate) fn periodic_group_width(ui: &mut egui::Ui, interval_label: &str) -> f32 {
-    let spacing = ui.spacing().item_spacing.x;
-    let font_id = ui.style().text_styles[&egui::TextStyle::Body].clone();
-    let measure = |ui: &mut egui::Ui, text: &str| -> f32 {
-        ui.fonts_mut(|f| {
-            f.layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::WHITE)
-        })
-        .size()
-        .x
-    };
-    80.0 + measure(ui, interval_label) + 62.0 + measure(ui, "ms") + spacing * 3.0
 }
 
 /// 通用图标按钮：分配点击区域并调用绘制函数。

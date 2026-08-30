@@ -104,13 +104,13 @@ pub fn combo(
 
     if ui.is_rect_visible(resp.rect) {
         let fill = if enabled {
-            egui::Color32::WHITE
+            theme::input_bg()
         } else {
-            egui::Color32::from_gray(235)
+            egui::Color32::from_rgb(0x18, 0x1D, 0x24)
         };
         // 背景 + 边框
         ui.painter()
-            .rect(rect, 4.0, fill, theme::BORDER, egui::StrokeKind::Inside);
+            .rect(rect, 4.0, fill, theme::border(), egui::StrokeKind::Inside);
 
         // 选中文本：左对齐、垂直居中，预留右侧箭头空间（超长自动裁剪）
         let text_rect = egui::Rect::from_min_max(
@@ -124,7 +124,7 @@ pub fn combo(
                 egui::Align2::LEFT_CENTER,
                 text,
                 egui::FontId::proportional(14.0),
-                theme::TEXT,
+                theme::text(),
             );
         }
 
@@ -135,7 +135,7 @@ pub fn combo(
         );
         ui.painter().add(egui::Shape::convex_polygon(
             vec![tri.left_top(), tri.right_top(), tri.center_bottom()],
-            theme::TEXT,
+            theme::text(),
             egui::Stroke::NONE,
         ));
     }

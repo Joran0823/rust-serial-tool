@@ -1,8 +1,8 @@
-//! 顶部各区：串口配置（横向分布、填满窗口）、显示/日志设置行、文件发送行。
+﻿//! 顶部各区：串口配置（横向分布、填满窗口）、显示/日志设置行、文件发送行。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版，800×700 单栏布局）。
 
 use crate::app::SerialApp;
-use crate::config::{
+use crate::config::{ThemeSetting, 
     DataBits, DisplayMode, FileSendMode, FlowControl, Parity, StopBits, TextEncoding,
 };
 use crate::i18n::Language;
@@ -29,11 +29,12 @@ impl SerialApp {
         const ARROW_W: f32 = 20.0;
         const BTN_W: f32 = 88.0;
         const LANG_W: f32 = 80.0;
+        const THEME_W: f32 = 80.0;
         const PORT_MIN_COMBO_W: f32 = 100.0;
         const PORT_GROWTH: f32 = 0.20; // 窗口变宽时端口最多再增加初始宽度的 20%
         const PORT_HEADROOM: f32 = 30.0; // 端口初始宽度预留余量，保证语言按钮完整显示
         /// 标准窗口（1100px）下的面板可用宽度，用于计算端口下拉框的基准宽度
-        const AVAIL_REF: f32 = 1084.0;
+        const AVAIL_REF: f32 = 1200.0;
 
         // 测量标签文字宽度：端口按英文宽度固定，其余取中英文最大宽度
         let measure = |ui: &mut egui::Ui, text: &str| -> f32 {
@@ -63,26 +64,41 @@ impl SerialApp {
             + parity_field_w
             + flow_field_w
             + BTN_W
-            + LANG_W;
+            + LANG_W
+            + THEME_W;
         // 端口下拉框：初始宽度按标准窗口计算，控件间隔固定；
         // 窗口变宽时端口最多再增加初始宽度的 20%，其余空间留在行尾
+
+        // 计算端口显示文本宽度，确保下拉框宽度足够显示完整串口名
+        let port_text = if self.config.port.port_name.is_empty() {
+            s.port_placeholder.to_string()
+        } else {
+            self.port_list
+                .iter()
+                .find(|(_, n)| n == &self.config.port.port_name)
+                .map(|(d, _)| d.clone())
+                .unwrap_or_else(|| self.config.port.port_name.clone())
+        };
+        let port_text_w = measure(ui, &port_text);
+        let port_min_w = (PORT_MIN_COMBO_W).max(port_text_w + 8.0 + 26.0 + 4.0);
+
         let port_base_w = (AVAIL_REF
             - fixed_units
-            - 7.0 * GAP
+            - 8.0 * GAP
             - (port_label_w + FIELD_INNER)
             - PORT_HEADROOM)
-            .max(PORT_MIN_COMBO_W);
+            .max(port_min_w);
         let port_max_w = port_base_w * (1.0 + PORT_GROWTH);
         let extra = (avail - AVAIL_REF).max(0.0);
         let mut port_combo_w = (port_base_w + extra).min(port_max_w);
         // 兜底：窗口过窄时收缩端口宽度
-        let overflow = fixed_units + port_label_w + FIELD_INNER + port_combo_w + 7.0 * GAP - avail;
+        let overflow = fixed_units + port_label_w + FIELD_INNER + port_combo_w + 8.0 * GAP - avail;
         if overflow > 0.0 {
-            port_combo_w = (port_combo_w - overflow).max(PORT_MIN_COMBO_W);
+            port_combo_w = (port_combo_w - overflow).max(port_min_w);
         }
 
-        ui.spacing_mut().item_spacing.x = GAP;
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(GAP, 2.0);
+        ui.horizontal_wrapped(|ui| {
             // 子布局1：端口（label 固定，下拉框自适应）
             ui.allocate_ui_with_layout(
                 egui::vec2(port_label_w + FIELD_INNER + port_combo_w, 28.0),
@@ -138,19 +154,19 @@ impl SerialApp {
                         (BAUD_FRAME_W - BAUD_MARGIN_X - ARROW_W - FIELD_INNER).max(40.0);
                     let mut arrow_resp = None;
                     egui::Frame::new()
-                        .fill(egui::Color32::WHITE)
-                        .stroke(theme::BORDER)
+                        .fill(theme::input_bg())
+                        .stroke(theme::border())
                         .corner_radius(4)
-                        .inner_margin(egui::Margin::symmetric(4, 2))
+                        .inner_margin(egui::Margin::symmetric(4, 1))
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.x = FIELD_INNER;
                             let mut baud = self.baud_input.clone();
-                            let edit = ui.add(
+                            let edit = ui.add_sized([text_w, 26.0],
                                 egui::TextEdit::singleline(&mut baud)
                                     .font(egui::TextStyle::Monospace)
                                     .frame(egui::Frame::NONE)
                                     .background_color(egui::Color32::TRANSPARENT)
-                                    .desired_width(text_w),
+                                    .margin(egui::vec2(4.0, 0.0)),
                             );
                             if edit.changed() {
                                 self.baud_input = baud;
@@ -168,7 +184,7 @@ impl SerialApp {
                             edit.on_hover_text(s.baud_rate);
                             let arrow = ui
                                 .add_sized(
-                                    [ARROW_W, 20.0],
+                                    [ARROW_W, 26.0],
                                     egui::Button::new("")
                                         .fill(egui::Color32::TRANSPARENT)
                                         .stroke(egui::Stroke::NONE),
@@ -181,7 +197,7 @@ impl SerialApp {
                                 );
                                 ui.painter().add(egui::Shape::convex_polygon(
                                     vec![tri.left_top(), tri.right_top(), tri.center_bottom()],
-                                    theme::TEXT_SOFT,
+                                    theme::text_soft(),
                                     egui::Stroke::NONE,
                                 ));
                             }
@@ -327,14 +343,39 @@ impl SerialApp {
                     }
                 }
             });
+            // 主题按钮（固定宽度，高度与打开串口按钮一致）
+            let theme_btn = ui
+                .add_sized([THEME_W, 30.0], theme::secondary_widget(s.theme))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.theme_tip);
+            egui::Popup::menu(&theme_btn).show(|ui| {
+                let system_dark = ui
+                    .ctx()
+                    .system_theme()
+                    .is_none_or(|t| t == egui::Theme::Dark);
+                for (label, setting) in [
+                    (s.theme_system, ThemeSetting::System),
+                    (s.theme_dark, ThemeSetting::Dark),
+                    (s.theme_light, ThemeSetting::Light),
+                ] {
+                    if ui
+                        .selectable_label(self.config.theme == setting, label)
+                        .clicked()
+                    {
+                        self.config.theme = setting;
+                        theme::apply_theme(ui.ctx(), setting.is_dark(system_dark));
+                        ui.close();
+                    }
+                }
+            });
         });
     }
 
     /// 布局2-子1：接收功能设置行（横向分布、高度固定、宽度自适应、无边框）。
     pub fn receive_settings_row(&mut self, ui: &mut egui::Ui) {
         let s = self.t();
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(s.display).color(theme::TEXT_SOFT));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(s.display).color(theme::text_soft()));
             widgets::combo(
                 ui,
                 80.0,
@@ -363,7 +404,7 @@ impl SerialApp {
                     }
                 },
             );
-            ui.label(egui::RichText::new(s.encoding).color(theme::TEXT_SOFT));
+            ui.label(egui::RichText::new(s.encoding).color(theme::text_soft()));
             widgets::combo(
                 ui,
                 86.0,
@@ -477,7 +518,7 @@ impl SerialApp {
     /// 文件发送行。
     pub fn file_panel(&mut self, ui: &mut egui::Ui) {
         let s = self.t();
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_sized([102.0, 33.0], theme::primary_widget(s.send_file))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -509,7 +550,7 @@ impl SerialApp {
             );
             // 逐行发送时：行间隔控件紧跟在模式下拉框后面
             if self.config.file_mode == FileSendMode::LineByLine {
-                ui.label(egui::RichText::new(s.line_interval).color(theme::TEXT_SOFT));
+                ui.label(egui::RichText::new(s.line_interval).color(theme::text_soft()));
                 let resp = ui.add_sized(
                     [80.0, 24.0],
                     egui::DragValue::new(&mut self.config.file_line_interval_ms)
@@ -751,6 +792,14 @@ mod tests {
             display_decoder: None,
             display_decoder_enc: None,
             display_dropped: 0,
+            terminal_buffer: Vec::new(),
+            terminal_text: String::new(),
+            terminal_decoder: None,
+            terminal_decoder_enc: None,
+            terminal_cache_invalid: false,
+            terminal_decoded_len: 0,
+            terminal_input: String::new(),
+            terminal_cursor: 0,
             rx_total: 0,
             tx_total: 0,
             paused: false,
@@ -813,7 +862,7 @@ mod tests {
             let output = ctx.run_ui(Default::default(), |ui| {
                 // 模拟 1100px 窗口内的顶部面板（1100 - 左右边距 16）
                 ui.allocate_ui_with_layout(
-                    eframe::egui::vec2(1084.0, 48.0),
+                    eframe::egui::vec2(1200.0, 48.0),
                     eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
                     |ui| app.config_panel(ui),
                 );
@@ -826,7 +875,7 @@ mod tests {
                     .find(|(t, _, _)| t == label)
                     .unwrap_or_else(|| panic!("缺少控件文本: {label}"))
             };
-            // 从左到右的顺序：端口 < 波特率 < 数据位 < 停止位 < 校验位 < 流控 < 打开串口 < 语言
+            // 从左到右的顺序：端口 < 波特率 < 数据位 < 停止位 < 校验位 < 流控 < 打开串口 < 语言 < 主题
             let order = [
                 find(s.port).1,
                 find(s.baud_rate).1,
@@ -836,6 +885,7 @@ mod tests {
                 find(s.flow_control).1,
                 find(s.open_port).1,
                 find(s.language).1,
+                find(s.theme).1,
             ];
             for w in order.windows(2) {
                 assert!(
@@ -845,21 +895,21 @@ mod tests {
                     w[1]
                 );
             }
-            // 语言按钮必须完整落在行内（文本右缘不超过面板宽度）
-            let (_, x, w) = *find(s.language);
+            // 主题按钮必须完整落在行内（文本右缘不超过面板宽度）
+            let (_, x, w) = *find(s.theme);
             assert!(
-                x + w <= 1084.0,
-                "[{lang:?}] 语言按钮被挤出: x={x} w={w} (行宽 1084)"
+                x + w <= 1200.0,
+                "[{lang:?}] 主题按钮被挤出: x={x} w={w} (行宽 1200)"
             );
-            // 整行从左到右填满：端口标签在行首，语言按钮靠近行尾
+            // 整行从左到右填满：端口标签在行首，主题按钮靠近行尾
             assert!(
                 find(s.port).1 < 1.0,
                 "[{lang:?}] 端口标签未从行首开始: x={}",
                 find(s.port).1
             );
             assert!(
-                x + w >= 1084.0 - 75.0,
-                "[{lang:?}] 语言按钮未靠右/整行未填满: 右缘={}",
+                x + w >= 1200.0 - 75.0,
+                "[{lang:?}] 主题按钮未靠右/整行未填满: 右缘={}",
                 x + w
             );
             // 端口下拉框自适应吸收剩余空间：波特率标签应被推到较靠右的位置
