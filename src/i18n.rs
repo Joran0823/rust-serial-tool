@@ -55,6 +55,7 @@ pub struct Strings {
     pub status_periodic: &'static str,
 
     // 串口配置行
+    pub port: &'static str,
     pub port_placeholder: &'static str,
     pub port_tip: &'static str,
     pub baud_rate: &'static str,
@@ -124,7 +125,6 @@ pub struct Strings {
     pub progress_bytes: &'static str,
 
     // 发送区
-    pub send_area: &'static str,
     pub send: &'static str,
     pub send_tip: &'static str,
     pub send_input_hint: &'static str,
@@ -269,6 +269,7 @@ pub const ZH: Strings = Strings {
     status_not_connected: "未连接",
     status_periodic: "周期发送中",
 
+    port: "端口",
     port_placeholder: "请选择",
     port_tip: "选择要连接的串口",
     baud_rate: "波特率",
@@ -335,7 +336,6 @@ pub const ZH: Strings = Strings {
     cancel_send_tip: "取消本次文件发送",
     progress_bytes: "{sent}/{total} 字节",
 
-    send_area: "发送区",
     send: "发送",
     send_tip: "以当前模式发送输入框内容",
     send_input_hint: "请输入内容…",
@@ -465,6 +465,7 @@ pub const EN: Strings = Strings {
     status_not_connected: "Not connected",
     status_periodic: "Periodic sending",
 
+    port: "Port",
     port_placeholder: "Select",
     port_tip: "Select the serial port to connect",
     baud_rate: "Baud rate",
@@ -531,7 +532,6 @@ pub const EN: Strings = Strings {
     cancel_send_tip: "Cancel the current file send",
     progress_bytes: "{sent}/{total} bytes",
 
-    send_area: "Send Area",
     send: "Send",
     send_tip: "Send the input box content with the current mode",
     send_input_hint: "Enter content…",

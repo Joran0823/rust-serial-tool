@@ -1,16 +1,15 @@
-﻿//! 顶部各区：串口配置（横向分布、填满窗口）、显示/日志设置行、文件发送行。
+﻿//! 顶部配置区：串口配置（横向分布、填满窗口，含打开/关闭串口、语言、主题）。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版，800×700 单栏布局）。
 
 use crate::app::SerialApp;
-use crate::config::{ThemeSetting, 
-    DataBits, DisplayMode, FileSendMode, FlowControl, Parity, StopBits, TextEncoding,
+use crate::config::{
+    DataBits, FlowControl, Parity, StopBits, ThemeSetting,
 };
 use crate::i18n::Language;
 use crate::serial::Command;
 use crate::ui::widgets;
 use crate::ui::theme;
 use eframe::egui;
-use std::path::PathBuf;
 
 impl SerialApp {
     /// 串口配置区：6 个字段子布局 + “打开串口”/“语言”按钮，
@@ -371,244 +370,6 @@ impl SerialApp {
         });
     }
 
-    /// 布局2-子1：接收功能设置行（横向分布、高度固定、宽度自适应、无边框）。
-    pub fn receive_settings_row(&mut self, ui: &mut egui::Ui) {
-        let s = self.t();
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new(s.display).color(theme::text_soft()));
-            widgets::combo(
-                ui,
-                80.0,
-                26.0,
-                true,
-                self.config.display_mode.label(self.config.language),
-                s.display_tip,
-                |ui| {
-                    if ui
-                        .selectable_value(
-                            &mut self.config.display_mode,
-                            DisplayMode::Text,
-                            s.text_mode,
-                        )
-                        .changed()
-                        || ui
-                            .selectable_value(
-                                &mut self.config.display_mode,
-                                DisplayMode::Hex,
-                                "HEX",
-                            )
-                            .changed()
-                    {
-                        self.display_cache_invalid = true;
-                        self.display_dirty = true;
-                    }
-                },
-            );
-            ui.label(egui::RichText::new(s.encoding).color(theme::text_soft()));
-            widgets::combo(
-                ui,
-                86.0,
-                26.0,
-                true,
-                self.config.text_encoding.label(),
-                s.encoding_tip,
-                |ui| {
-                    if ui
-                        .selectable_value(
-                            &mut self.config.text_encoding,
-                            TextEncoding::Utf8,
-                            "UTF-8",
-                        )
-                        .changed()
-                        || ui
-                            .selectable_value(
-                                &mut self.config.text_encoding,
-                                TextEncoding::Gbk,
-                                "GBK",
-                            )
-                            .changed()
-                        || ui
-                            .selectable_value(
-                                &mut self.config.text_encoding,
-                                TextEncoding::Ascii,
-                                "ASCII",
-                            )
-                            .changed()
-                    {
-                        self.display_cache_invalid = true;
-                        self.display_dirty = true;
-                    }
-                },
-            );
-            ui.checkbox(&mut self.config.autoscroll, s.auto_scroll)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.auto_scroll_tip);
-            ui.checkbox(&mut self.paused, s.pause_receive)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.pause_receive_tip);
-            ui.checkbox(&mut self.config.auto_refresh_ports, s.auto_refresh)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.auto_refresh_tip);
-            ui.checkbox(&mut self.config.show_sent_data, s.show_sent)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.show_sent_tip);
-
-            // 记录日志：勾选后自动弹出文件保存对话框选择日志路径
-            let log_resp = ui
-                .checkbox(&mut self.log_on, s.record_log)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.record_log_tip);
-            if log_resp.changed() {
-                if self.log_on {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(s.log_filter, &["log", "txt"])
-                        .set_file_name("serial.log")
-                        .save_file()
-                    {
-                        self.set_log_path(Some(path));
-                    } else {
-                        self.log_on = false;
-                    }
-                } else {
-                    self.close_log();
-                }
-            }
-
-            // 打开日志路径：仅当“记录日志”勾选后启用
-            let log_path = self.log_path.clone();
-            if ui
-                .add_enabled(
-                    self.log_on,
-                    egui::Button::new(s.open_log_path)
-                        .min_size(egui::vec2(88.0, 32.0)),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(if self.log_on {
-                    s.open_log_path_tip
-                } else {
-                    s.enable_log_first
-                })
-                .clicked()
-            {
-                open_log_folder_path(log_path.as_deref());
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_sized([72.0, 32.0], theme::secondary_widget(s.clear_stats))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(s.clear_stats_tip)
-                    .clicked()
-                {
-                    self.rx_total = 0;
-                    self.tx_total = 0;
-                }
-                if ui
-                    .add_sized([72.0, 32.0], theme::secondary_widget(s.clear_display))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(s.clear_display_tip)
-                    .clicked()
-                {
-                    self.clear_display();
-                }
-            });
-        });
-    }
-
-    /// 文件发送行。
-    pub fn file_panel(&mut self, ui: &mut egui::Ui) {
-        let s = self.t();
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_sized([102.0, 33.0], theme::primary_widget(s.send_file))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.send_file_tip)
-                .clicked()
-            {
-                self.start_file_send();
-            }
-            // 统一样式下拉框：宽度与发送文件按钮一致（102px），高度相同（33px）
-            widgets::combo(
-                ui,
-                102.0,
-                33.0,
-                true,
-                self.config.file_mode.label(self.config.language),
-                s.file_mode_tip,
-                |ui| {
-                    ui.selectable_value(
-                        &mut self.config.file_mode,
-                        FileSendMode::WholeFile,
-                        s.whole_file,
-                    );
-                    ui.selectable_value(
-                        &mut self.config.file_mode,
-                        FileSendMode::LineByLine,
-                        s.line_by_line,
-                    );
-                },
-            );
-            // 逐行发送时：行间隔控件紧跟在模式下拉框后面
-            if self.config.file_mode == FileSendMode::LineByLine {
-                ui.label(egui::RichText::new(s.line_interval).color(theme::text_soft()));
-                let resp = ui.add_sized(
-                    [80.0, 24.0],
-                    egui::DragValue::new(&mut self.config.file_line_interval_ms)
-                        .range(0..=60_000)
-                        .suffix(" ms"),
-                );
-                resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(s.line_interval_tip);
-            }
-            // 选择文件按钮：固定较宽宽度，选中文件后直接显示文件名
-            let name = self
-                .pending_file
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .map(|f| f.to_string_lossy().into_owned());
-            let btn_text = match &name {
-                Some(n) => shorten_file_name(n, 22),
-                None => s.choose_file.to_string(),
-            };
-            if ui
-                .add_sized([180.0, 33.0], theme::secondary_widget(&btn_text))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.choose_file_tip)
-                .clicked()
-                && let Some(path) = rfd::FileDialog::new().pick_file()
-            {
-                self.pending_file = Some(path);
-            }
-            // 进度条：仅在发送时显示，占满“选择文件”按钮后的剩余宽度
-            if self.file_send_active {
-                let spacing = ui.spacing().item_spacing.x;
-                let cancel_w = 72.0 + spacing;
-                let (sent, total) = self.file_progress.unwrap_or((0, 0));
-                let frac = if total > 0 {
-                    sent as f32 / total as f32
-                } else {
-                    0.0
-                };
-                ui.add(
-                    egui::ProgressBar::new(frac)
-                        .desired_width((ui.available_width() - cancel_w).max(60.0))
-                        .text(s.fill(
-                            s.progress_bytes,
-                            &[("sent", sent.to_string()), ("total", total.to_string())],
-                        )),
-                );
-                if ui
-                    .add_sized([72.0, 33.0], theme::primary_widget(s.cancel))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(s.cancel_send_tip)
-                    .clicked()
-                {
-                    self.session.send(Command::StopFile);
-                }
-            }
-        });
-    }
-
     pub fn refresh_ports(&mut self) {
         match serialport::available_ports() {
             Ok(ports) => {
@@ -654,33 +415,6 @@ impl SerialApp {
         self.session.send(Command::Open(settings));
         self.set_status(self.t().opening_port.to_string(), false);
     }
-
-    pub fn set_log_path(&mut self, path: Option<PathBuf>) {
-        self.close_log();
-        self.log_path = path.clone();
-        if let Some(p) = &path {
-            match std::fs::File::create(p) {
-                Ok(file) => {
-                    self.log_file = Some(std::io::BufWriter::new(file));
-                    self.log_on = true;
-                }
-                Err(e) => {
-                    self.log_on = false;
-                    self.set_status(
-                        self.t()
-                            .fill(self.t().create_log_failed, &[("e", e.to_string())]),
-                        true,
-                    );
-                }
-            }
-        } else {
-            self.log_on = false;
-        }
-    }
-
-    pub fn close_log(&mut self) {
-        self.log_file = None;
-    }
 }
 
 /// 字段内部 label 与控件之间的间距。
@@ -713,18 +447,6 @@ fn field_ui(
     );
 }
 
-/// 文件名过长时保留末尾（含扩展名），避免撑破固定宽度的“选择文件”按钮。
-fn shorten_file_name(name: &str, max_chars: usize) -> String {
-    let count = name.chars().count();
-    if count <= max_chars {
-        name.to_string()
-    } else {
-        let keep = max_chars.saturating_sub(1);
-        let tail: String = name.chars().skip(count - keep).collect();
-        format!("…{tail}")
-    }
-}
-
 /// 端口显示名：优先 USB 产品名/制造商；无名称时直接显示端口名（不在尾部追加 COMx）。
 fn port_display(info: &serialport::SerialPortInfo) -> String {
     let friendly = match &info.port_type {
@@ -742,24 +464,6 @@ fn port_display(info: &serialport::SerialPortInfo) -> String {
         info.port_name.clone()
     } else {
         friendly
-    }
-}
-
-/// 在系统文件管理器中打开日志文件所在目录（Windows 定位到文件，其他平台打开目录）。
-fn open_log_folder_path(path: Option<&std::path::Path>) {
-    let Some(path) = path else {
-        return;
-    };
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .spawn();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let dir = path.parent().unwrap_or(path);
-        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
 

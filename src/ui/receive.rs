@@ -11,9 +11,11 @@ use crate::codec;
 use crate::config::{DisplayMode, TextEncoding};
 use crate::serial::Command;
 use crate::ui::theme;
+use crate::ui::widgets;
 use crate::util;
 use eframe::egui;
 use std::io::Write;
+use std::path::PathBuf;
 
 const DATA_DISPLAY_CAP: usize = 256 * 1024;
 /// 显示缓存字符数上限（超出后丢弃最早的内容）
@@ -56,6 +58,201 @@ pub struct DisplaySeg {
 }
 
 impl SerialApp {
+    /// 接收设置行（显示模式/编码/自动滚动/暂停/日志等 + 清空统计/清空显示）。
+    pub fn receive_settings_row(&mut self, ui: &mut egui::Ui) {
+        let s = self.t();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(s.display).color(theme::text_soft()));
+            widgets::combo(
+                ui,
+                80.0,
+                26.0,
+                true,
+                self.config.display_mode.label(self.config.language),
+                s.display_tip,
+                |ui| {
+                    if ui
+                        .selectable_value(
+                            &mut self.config.display_mode,
+                            DisplayMode::Text,
+                            s.text_mode,
+                        )
+                        .changed()
+                        || ui
+                            .selectable_value(
+                                &mut self.config.display_mode,
+                                DisplayMode::Hex,
+                                "HEX",
+                            )
+                            .changed()
+                    {
+                        self.display_cache_invalid = true;
+                        self.display_dirty = true;
+                    }
+                },
+            );
+            ui.label(egui::RichText::new(s.encoding).color(theme::text_soft()));
+            widgets::combo(
+                ui,
+                86.0,
+                26.0,
+                true,
+                self.config.text_encoding.label(),
+                s.encoding_tip,
+                |ui| {
+                    if ui
+                        .selectable_value(
+                            &mut self.config.text_encoding,
+                            TextEncoding::Utf8,
+                            "UTF-8",
+                        )
+                        .changed()
+                        || ui
+                            .selectable_value(
+                                &mut self.config.text_encoding,
+                                TextEncoding::Gbk,
+                                "GBK",
+                            )
+                            .changed()
+                        || ui
+                            .selectable_value(
+                                &mut self.config.text_encoding,
+                                TextEncoding::Ascii,
+                                "ASCII",
+                            )
+                            .changed()
+                    {
+                        self.display_cache_invalid = true;
+                        self.display_dirty = true;
+                    }
+                },
+            );
+            ui.checkbox(&mut self.config.autoscroll, s.auto_scroll)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.auto_scroll_tip);
+            ui.checkbox(&mut self.paused, s.pause_receive)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.pause_receive_tip);
+            ui.checkbox(&mut self.config.auto_refresh_ports, s.auto_refresh)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.auto_refresh_tip);
+            ui.checkbox(&mut self.config.show_sent_data, s.show_sent)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.show_sent_tip);
+            // 显示时间戳：关闭后去掉 [HH:MM:SS.mmm] 前缀，仅保留 [RX]/[TX] 方向标记
+            ui.checkbox(&mut self.config.show_timestamps, s.show_timestamps)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.show_timestamps_tip);
+            // 终端模式：切换时清空数据展示（普通展示区与终端缓冲互不残留）
+            let terminal_resp = ui
+                .checkbox(&mut self.config.terminal_mode, s.terminal_mode)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.terminal_mode_tip);
+            if terminal_resp.changed() {
+                self.clear_display();
+            }
+            // 终端模式专属选项：本地回显 / 回车发送（仅终端模式开启时可用）
+            let term_on = self.config.terminal_mode;
+            ui.add_enabled(
+                term_on,
+                egui::Checkbox::new(&mut self.config.terminal_auto_echo, s.auto_echo),
+            )
+            .on_hover_text(s.auto_echo_tip);
+            ui.add_enabled(
+                term_on,
+                egui::Checkbox::new(&mut self.config.terminal_enter_sends, s.enter_sends),
+            )
+            .on_hover_text(s.enter_sends_tip);
+
+            // 记录日志：勾选后自动弹出文件保存对话框选择日志路径
+            let log_resp = ui
+                .checkbox(&mut self.log_on, s.record_log)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(s.record_log_tip);
+            if log_resp.changed() {
+                if self.log_on {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(s.log_filter, &["log", "txt"])
+                        .set_file_name("serial.log")
+                        .save_file()
+                    {
+                        self.set_log_path(Some(path));
+                    } else {
+                        self.log_on = false;
+                    }
+                } else {
+                    self.close_log();
+                }
+            }
+
+            // 打开日志路径：仅当“记录日志”勾选后启用
+            let log_path = self.log_path.clone();
+            if ui
+                .add_enabled(
+                    self.log_on,
+                    egui::Button::new(s.open_log_path)
+                        .min_size(egui::vec2(88.0, 32.0)),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(if self.log_on {
+                    s.open_log_path_tip
+                } else {
+                    s.enable_log_first
+                })
+                .clicked()
+            {
+                open_log_folder_path(log_path.as_deref());
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_sized([72.0, 32.0], theme::secondary_widget(s.clear_stats))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(s.clear_stats_tip)
+                    .clicked()
+                {
+                    self.rx_total = 0;
+                    self.tx_total = 0;
+                }
+                if ui
+                    .add_sized([72.0, 32.0], theme::secondary_widget(s.clear_display))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(s.clear_display_tip)
+                    .clicked()
+                {
+                    self.clear_display();
+                }
+            });
+        });
+    }
+
+    pub fn set_log_path(&mut self, path: Option<PathBuf>) {
+        self.close_log();
+        self.log_path = path.clone();
+        if let Some(p) = &path {
+            match std::fs::File::create(p) {
+                Ok(file) => {
+                    self.log_file = Some(std::io::BufWriter::new(file));
+                    self.log_on = true;
+                }
+                Err(e) => {
+                    self.log_on = false;
+                    self.set_status(
+                        self.t()
+                            .fill(self.t().create_log_failed, &[("e", e.to_string())]),
+                        true,
+                    );
+                }
+            }
+        } else {
+            self.log_on = false;
+        }
+    }
+
+    pub fn close_log(&mut self) {
+        self.log_file = None;
+    }
+
     /// 布局2-子2：接收区（内容填充、宽高自适应、无边框），只读文本框 + 符合只读样式的浅灰背景。
     pub fn receive_area(&mut self, ui: &mut egui::Ui) {
         let s = self.t();
@@ -605,6 +802,24 @@ impl SerialApp {
         let _ = f.write_all(text.as_bytes());
         let _ = f.write_all(b"\n");
         let _ = f.flush();
+    }
+}
+
+/// 在系统文件管理器中打开日志文件所在目录（Windows 定位到文件，其他平台打开目录）。
+fn open_log_folder_path(path: Option<&std::path::Path>) {
+    let Some(path) = path else {
+        return;
+    };
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = path.parent().unwrap_or(path);
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
 

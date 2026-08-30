@@ -3,7 +3,7 @@
 use crate::config::{Config, TextEncoding};
 use crate::i18n::{Language, Strings};
 use crate::serial::{Command, Event, SerialSession};
-use crate::ui::data::DisplaySeg;
+use crate::ui::receive::DisplaySeg;
 use crate::ui::theme;
 use eframe::egui;
 use egui_dock::{DockArea, DockState, Node, NodeIndex, NodePath, Style, TabViewer};
