@@ -53,7 +53,13 @@ impl SerialApp {
         .map(measure)
         .fold(0.0_f32, f32::max);
         let btn_w = wide + BTN_PADDING_X;
-        let btn_item = || egui_flex::item().min_size(egui::vec2(btn_w, 28.0));
+        // 交叉轴必须显示指定 Center：egui_flex 默认 FlexAlign::Stretch
+        // 会把 item 高度拉伸到行高/容器高，导致按钮被拉满整个面板。
+        let btn_item = || {
+            egui_flex::item()
+                .align_self(egui_flex::FlexAlign::Center)
+                .min_size(egui::vec2(btn_w, 28.0))
+        };
 
         flex.show(ui, |flex| {
             // 最左侧：语言按钮（固定宽度）
@@ -120,7 +126,9 @@ impl SerialApp {
 
             // 端口：自动刷新复选框（含 label）+ 下拉框按文本自适应宽度，
             // 两者合为一个 flex 实体：空间不足时整体换行，不拆开。
-            flex.add_ui(egui_flex::item(), |ui| {
+            flex.add_ui(
+                egui_flex::item().align_self(egui_flex::FlexAlign::Center),
+                |ui| {
                 ui.checkbox(&mut self.config.auto_refresh_ports, s.auto_refresh)
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .on_hover_text(s.auto_refresh_tip);
@@ -154,7 +162,9 @@ impl SerialApp {
 
             // 波特率：label 自动宽度；文本框自适应 + 固定宽下拉按钮。
             // 整个组合（label+文本框+箭头）作为一个 flex 实体，不拆开。
-            flex.add_ui(egui_flex::item(), |ui| {
+            flex.add_ui(
+                egui_flex::item().align_self(egui_flex::FlexAlign::Center),
+                |ui| {
                 ui.label(egui::RichText::new(s.baud_rate).color(theme::text_soft()))
                     .on_hover_text(s.baud_rate_tip);
                 {
@@ -235,7 +245,9 @@ impl SerialApp {
             });
 
             // 数据位 / 停止位 / 校验位 / 流控（label 与下拉框每个组合是一个 flex 实体）
-            flex.add_ui(egui_flex::item(), |ui| {
+            flex.add_ui(
+                egui_flex::item().align_self(egui_flex::FlexAlign::Center),
+                |ui| {
                 field_ui(
                     ui,
                     s.data_bits,
@@ -250,7 +262,9 @@ impl SerialApp {
                     },
                 );
             });
-            flex.add_ui(egui_flex::item(), |ui| {
+            flex.add_ui(
+                egui_flex::item().align_self(egui_flex::FlexAlign::Center),
+                |ui| {
                 field_ui(
                     ui,
                     s.stop_bits,
@@ -268,7 +282,9 @@ impl SerialApp {
                     },
                 );
             });
-            flex.add_ui(egui_flex::item(), |ui| {
+            flex.add_ui(
+                egui_flex::item().align_self(egui_flex::FlexAlign::Center),
+                |ui| {
                 field_ui(
                     ui,
                     s.parity,
@@ -289,7 +305,9 @@ impl SerialApp {
                 FlowControl::Software => s.flow_software,
                 FlowControl::Hardware => s.flow_hardware,
             };
-            flex.add_ui(egui_flex::item(), |ui| {
+            flex.add_ui(
+                egui_flex::item().align_self(egui_flex::FlexAlign::Center),
+                |ui| {
                 field_ui(
                     ui,
                     s.flow_control,
@@ -569,6 +587,54 @@ mod tests {
         // 自动刷新复选框应落到第一行或换行后第二行，且完整落在行内
         let (_, port_x, port_w) = *find(s.auto_refresh);
         assert!(port_x + port_w <= 500.0, "自动刷新被挤出: x={port_x} w={port_w}");
+    }
+
+    #[test]
+    fn config_panel_buttons_height_not_stretched() {
+        // 回归：egui_flex 默认 FlexAlign::Stretch 会把 item 交叉轴（高度）拉伸到
+        // 行高；若行高测量异常（如首帧 prev-pass 缺失）会错用容器可用高度，
+        // 导致语言/主题/打开串口按钮被拉满整个面板。必须显示指定
+        // align_self(Center)，按钮高度保持 ~28px。
+        let ctx = cjk_ctx();
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        let output = run_ui(&ctx, Default::default(), |ui| {
+            ui.allocate_ui_with_layout(
+                eframe::egui::vec2(1200.0, 96.0),
+                eframe::egui::Layout::left_to_right(eframe::egui::Align::Center),
+                |ui| app.config_panel(ui),
+            );
+        });
+        // egui Button 渲染为矩形/圆角矩形形状。收集高度 20..40px、宽度 ≥60px
+        // 的控件矩形（即语言/主题/打开串口按钮），验证高度未被拉伸。
+        let mut btn_heights = Vec::new();
+        for clipped in &output.shapes {
+            let rect = match &clipped.shape {
+                eframe::egui::epaint::Shape::Rect(rs) => Some(rs.rect),
+                eframe::egui::epaint::Shape::Path(p) if !p.points.is_empty() => {
+                    Some(eframe::egui::Rect::from_points(&p.points))
+                }
+                _ => None,
+            };
+            if let Some(r) = rect {
+                let h = r.height();
+                let w = r.width();
+                if (20.0..=40.0).contains(&h) && w >= 60.0 {
+                    btn_heights.push(h);
+                }
+            }
+        }
+        assert!(
+            btn_heights.len() >= 3,
+            "应至少找到 3 个按钮矩形（语言/主题/打开串口），实际 {}",
+            btn_heights.len()
+        );
+        for h in &btn_heights {
+            assert!(
+                *h <= 40.0,
+                "按钮高度被拉伸到 {h:.1}px（容器高 96px），应保持 ~28px"
+            );
+        }
     }
 
     #[test]
