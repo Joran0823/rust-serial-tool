@@ -11,22 +11,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// “发送文件”面板正文的固定高度。
-///
-/// 控件行高 33px，加上 egui_dock 正文外框默认 8px 上下内边距后约 49px；
-/// 但 egui_dock 的 tab 正文用 `ScrollArea::new([true, true])` 渲染，
-/// 而 egui 0.35 的 ScrollArea 有 `min_scrolled_size = 64px` 的最小内容高度：
-/// 若正文高度低于 64px，内容区会被强制撑到 64px 再垂直居中，导致控件被下推、
-/// 底部超出面板被裁掉（表现为“控件贴着下边沿”）。
-/// 因此这里取 66px（略高于 64px，并留出像素取整余量），使 ScrollArea 不再撑高、
-/// 行内 `Align::Center` 才能真正垂直居中。
-const FILE_BODY_H: f32 = 66.0;
+/// “发送文件”面板正文高度：33px 控件行 + 上下对称留白。
+/// dock 滚动条已关闭（`scroll_bars` 返回 false），不再受 ScrollArea
+/// 64px 最小内容高度限制，高度可收紧，把空间让给下方的队列。
+const FILE_BODY_H: f32 = 54.0;
 
-/// 可停靠面板：接收区 / 发送区 / 文件发送 / 队列。
+/// 队列面板正文最小高度：第一行控件（33px）+ 一个队列条目（30px）+ 余量。
+const QUEUE_BODY_MIN: f32 = 76.0;
+
+/// 可停靠面板：配置 / 接收区 / 发送区 / 文件发送 / 队列。
 ///
 /// 每个面板在 [`DockState`] 中是一个 tab，支持拖动、拆分、关闭（收起）与恢复。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiPanel {
+    Config,
     Receive,
     Send,
     File,
@@ -35,7 +33,8 @@ pub enum UiPanel {
 
 impl UiPanel {
     /// 全部面板，顺序即默认 tab 顺序。
-    pub const ALL: [UiPanel; 4] = [
+    pub const ALL: [UiPanel; 5] = [
+        UiPanel::Config,
         UiPanel::Receive,
         UiPanel::Send,
         UiPanel::File,
@@ -45,25 +44,30 @@ impl UiPanel {
     /// 当前语言下的面板标题。
     pub fn title(self, s: &Strings) -> &'static str {
         match self {
+            UiPanel::Config => s.port_config,
             UiPanel::Receive => s.receive_area,
-            UiPanel::Send => s.send,
+            UiPanel::Send => s.send_area,
             UiPanel::File => s.send_file,
-            UiPanel::Queue => s.queue,
+            UiPanel::Queue => s.queue_area,
         }
     }
 }
 
-/// 默认停靠布局：沿用原有纵向堆叠的观感（接收区在上，发送/文件/队列在下），
-/// 每个区域独立成一块，可拖动、拆分、关闭与恢复。
+/// 默认停靠布局：顶部是配置（矮条），下方沿用原有纵向堆叠的观感
+/// （接收区在上，发送/文件/队列在下），每个区域独立成块，
+/// 可拖动、拆分、关闭与恢复。
 fn default_dock_state() -> DockState<UiPanel> {
-    let mut dock = DockState::new(vec![UiPanel::Receive]);
+    let mut dock = DockState::new(vec![UiPanel::Config]);
     let root = NodeIndex::root();
+    let [_, receive] = dock
+        .main_surface_mut()
+        .split_below(root, 0.11, vec![UiPanel::Receive]);
     let [_, send] = dock
         .main_surface_mut()
-        .split_below(root, 0.49, vec![UiPanel::Send]);
+        .split_below(receive, 0.49, vec![UiPanel::Send]);
     let [_, file] = dock
         .main_surface_mut()
-        .split_below(send, 0.41, vec![UiPanel::File]);
+        .split_below(send, 0.40, vec![UiPanel::File]);
     let [_, _queue] = dock
         .main_surface_mut()
         .split_below(file, 0.19, vec![UiPanel::Queue]);
@@ -108,6 +112,15 @@ pub struct SerialApp {
     pub terminal_cache_invalid: bool,
     /// 已解码进 terminal_text 的缓冲字节数
     pub terminal_decoded_len: usize,
+    /// 终端缓冲中各批数据的起始字节偏移与时间戳标记
+    /// （「显示时间戳」开启时终端同样显示）
+    pub terminal_markers: Vec<(usize, String)>,
+    /// 已插入 terminal_text 的标记数（重建时从 0 重新回放）
+    pub terminal_markers_inserted: usize,
+    /// 时间戳标记在 terminal_text 中的字节范围（用于绿色渲染）
+    pub terminal_marker_spans: Vec<(usize, usize)>,
+    /// shell 提示符时间戳（显示时间戳 + 回车发送模式下，输入行前缀）
+    pub terminal_prompt: String,
     pub terminal_input: String,
     /// 待发送输入行中的光标位置（字符下标）
     pub terminal_cursor: usize,
@@ -139,6 +152,13 @@ pub struct SerialApp {
     pub alert: Option<String>,
     /// 首次启动是否已做过窗口屏幕内钳制
     pub viewport_clamped: bool,
+    /// 配置面板正文（不含 tab 栏）内容高度（px）。
+    ///
+    /// Config 面板在 dock 中关闭了 ScrollArea 的 64px 最小高度下限，
+    /// 面板高度完全由 split fraction 决定；`config_panel` 每帧写入
+    /// “内容实测高 + 2×顶部实际内边距”，下一帧据此反推 fraction，
+    /// 实现“自动高度 = 仅容下内部控件且上下留白一致”。
+    pub config_panel_body_h: f32,
     /// 停靠布局状态：四个区域以 tab 形式停靠，可拖动/拆分/关闭（收起）与恢复。
     /// 用 Option 包一层，便于每帧取出后与 `SerialApp` 的其余部分解耦借用。
     pub dock_state: Option<DockState<UiPanel>>,
@@ -178,6 +198,10 @@ impl SerialApp {
             terminal_decoder_enc: None,
             terminal_cache_invalid: false,
             terminal_decoded_len: 0,
+            terminal_markers: Vec::new(),
+            terminal_markers_inserted: 0,
+            terminal_marker_spans: Vec::new(),
+            terminal_prompt: String::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
             rx_total: 0,
@@ -198,6 +222,7 @@ impl SerialApp {
             status_error: false,
             alert: None,
             viewport_clamped: false,
+            config_panel_body_h: 44.0, // 首帧无实测值：按按钮高 28 + 上下边距估算
             dock_state: Some(default_dock_state()),
         };
         app.refresh_ports();
@@ -226,6 +251,12 @@ impl SerialApp {
     /// 渲染指定停靠面板的正文内容。
     pub fn panel_ui(&mut self, ui: &mut egui::Ui, panel: UiPanel) {
         match panel {
+            UiPanel::Config => {
+                // 配置区：内容横向流式排布，自动宽度按需换行。
+                // 面板自身高度由 dock 布局的 split fraction 控制，
+                // config_panel 每帧按实测内容高度写入 config_panel_body_h。
+                self.config_panel(ui);
+            }
             UiPanel::Receive => {
                 // 接收区：控件行（流式换行）+ 分隔线 + 带滚动条的接收文本框
                 ui.vertical(|ui| {
@@ -239,21 +270,38 @@ impl SerialApp {
                 });
             }
             UiPanel::Send => {
-                // 输入框填充剩余空间，按钮行固定在底部
-                let input_h = (ui.available_height() - 44.0 - 6.0).max(40.0);
+                // 输入框（内部滚动）+ 底部按钮行：内容适配面板高度，
+                // 顶部/底部可视留白一致（按实测顶部内边距预留同等底部空间）。
+                let top_inset = (ui.cursor().top() - ui.clip_rect().top()).max(0.0);
+                let btn_h = 32.0;
+                let gap = 6.0;
+                // allocate_ui_with_layout 的光标推进会额外带上 top_inset，
+                // 因此目标底部留白按 2×top_inset 预留才能让按钮恰好贴到对称位置
+                let input_h = (ui.clip_rect().bottom()
+                    - 2.0 * top_inset
+                    - ui.cursor().top()
+                    - gap
+                    - btn_h)
+                    .max(24.0);
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), input_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| self.send_input_box(ui),
                 );
-                ui.add_space(6.0);
+                ui.add_space(gap);
                 ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 44.0),
+                    egui::vec2(ui.available_width(), btn_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| self.send_buttons_row(ui),
                 );
             }
-            UiPanel::File => self.file_panel(ui),
+            UiPanel::File => {
+                // 文件面板正文固定为 FILE_BODY_H（33px 控件行 + 上下留白），
+                // 内容行垂直居中，避免控件贴顶。
+                let pad = ((ui.available_height() - 33.0) / 2.0).max(0.0);
+                ui.add_space(pad);
+                self.file_panel(ui);
+            }
             UiPanel::Queue => self.queue_panel(ui),
         }
     }
@@ -304,7 +352,8 @@ impl SerialApp {
             }
             Event::Tx(bytes) => {
                 self.tx_total += bytes.len() as u64;
-                if self.config.show_sent_data {
+                // 本地回显：非终端模式下把发送数据显示到展示区
+                if self.config.terminal_auto_echo {
                     self.append_tx(&bytes);
                 }
             }
@@ -359,6 +408,7 @@ impl SerialApp {
             }
         }
     }
+
 }
 
 impl eframe::App for SerialApp {
@@ -428,17 +478,6 @@ impl eframe::App for SerialApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 布局1：串口配置（顶部通栏，内容横向分布、高度固定、宽度自适应）
-        egui::Panel::top("serial_config")
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::panel())
-                    .inner_margin(egui::Margin::same(8)),
-            )
-            .show(ui, |ui| {
-                self.config_panel(ui);
-            });
-
         // 底部状态栏
         egui::Panel::bottom("status_bar")
             .exact_size(24.0)
@@ -454,6 +493,8 @@ impl eframe::App for SerialApp {
         // 主布局：四个区域以停靠 tab 呈现，可拖动、拆分、关闭（收起）与恢复。
         // 先取出 dock_state，使 viewer 可以独占借用 self，渲染结束后再放回。
         let mut dock = self.dock_state.take().expect("dock_state 应始终存在");
+        // 上一帧实测的配置面板正文高度（viewer 借用 self 前先取出）
+        let config_body_h = self.config_panel_body_h;
         let open_panels = current_open_panels(&dock);
         let mut viewer = DockViewer {
             app: self,
@@ -474,6 +515,18 @@ impl eframe::App for SerialApp {
                         &mut dock,
                         ui.available_height(),
                         style.tab_bar.height + FILE_BODY_H,
+                    );
+                    // “配置”面板固定为仅容纳内容的高度（内容高 + 2×顶部内边距）
+                    fix_config_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + config_body_h,
+                    );
+                    // “队列”面板高度至少容纳第一行 + 一个条目
+                    fix_queue_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + QUEUE_BODY_MIN,
                     );
                     DockArea::new(&mut dock)
                         .style(style)
@@ -537,7 +590,7 @@ impl Drop for SerialApp {
 struct DockViewer<'a> {
     app: &'a mut SerialApp,
     /// 本帧开始时各面板是否处于打开状态（按 [`UiPanel::ALL`] 顺序）。
-    open_panels: [bool; 4],
+    open_panels: [bool; 5],
     /// “+” 菜单中点击待恢复的面板及其所属分组，渲染结束后应用到 dock_state。
     pending_restore: Option<(UiPanel, NodeIndex)>,
 }
@@ -558,6 +611,19 @@ impl TabViewer for DockViewer<'_> {
         self.app.panel_ui(ui, *tab);
     }
 
+    /// 配置面板关闭双向滚动：ScrollArea 对启用方向的维度强制
+    /// `min_scrolled_size = 64px`（egui 0.36 默认），这是 dock 内面板高度的下限；
+    /// 关闭后 Config 面板高度完全由 split fraction 决定，可由每帧实测内容高度
+    /// 反推，实现“仅容下内部控件”。发送文本框、文件行、队列列表内部各自滚动，
+    /// 因此也关闭 dock 滚动条；其余面板保留滚动。
+    fn scroll_bars(&self, tab: &UiPanel) -> [bool; 2] {
+        match tab {
+            // 配置/发送/文件/队列关闭 dock 滚动条：内容各自适配或内部滚动
+            UiPanel::Config | UiPanel::Send | UiPanel::File | UiPanel::Queue => [false, false],
+            _ => [true, true],
+        }
+    }
+
     /// “+” 按钮弹出的面板列表：已打开的面板置灰，收起的面板可点击恢复。
     fn add_popup(&mut self, ui: &mut egui::Ui, path: NodePath) {
         let s = self.app.t();
@@ -573,14 +639,15 @@ impl TabViewer for DockViewer<'_> {
 }
 
 /// 统计当前处于打开状态的面板（仅统计主 surface，窗口 surface 暂不参与恢复管理）。
-fn current_open_panels(dock: &DockState<UiPanel>) -> [bool; 4] {
-    let mut open = [false; 4];
+fn current_open_panels(dock: &DockState<UiPanel>) -> [bool; 5] {
+    let mut open = [false; 5];
     for tab in dock.main_surface().tabs() {
         match tab {
-            UiPanel::Receive => open[0] = true,
-            UiPanel::Send => open[1] = true,
-            UiPanel::File => open[2] = true,
-            UiPanel::Queue => open[3] = true,
+            UiPanel::Config => open[0] = true,
+            UiPanel::Receive => open[1] = true,
+            UiPanel::Send => open[2] = true,
+            UiPanel::File => open[3] = true,
+            UiPanel::Queue => open[4] = true,
         }
     }
     open
@@ -647,6 +714,110 @@ fn fix_file_panel_height(
     }
 }
 
+/// 将“配置”面板固定为仅容纳内容的高度（不含 tab 栏）。
+///
+/// 与 [`fix_file_panel_height`] 同机制：仅在其独立成块且父级是纵向拆分时生效，
+/// 目标高度 = 实测内容高度 + 2×顶部实际内边距（上下留白一致）。
+fn fix_config_panel_height(
+    dock: &mut DockState<UiPanel>,
+    total_h: f32,
+    config_total_h: f32,
+) {
+    let Some((config_node, _)) = dock.main_surface().find_tab(&UiPanel::Config) else {
+        return;
+    };
+    let standalone = dock
+        .main_surface()
+        .leaf(config_node)
+        .map_or(true, |leaf| leaf.tabs().len() != 1);
+    if standalone {
+        return;
+    }
+    let Some(parent) = config_node.parent() else {
+        return;
+    };
+    let parent_h = node_height(dock, parent, total_h);
+    match &dock.main_surface()[parent] {
+        Node::Vertical(_) => {}
+        _ => return,
+    }
+    if parent_h <= 0.0 {
+        return;
+    }
+
+    // Config 是父拆分的左（上）子节点时，fraction 即其占比；右（下）子节点时取补集
+    let target = (config_total_h / parent_h).clamp(0.02, 0.95);
+    let target = if config_node == parent.left() {
+        target
+    } else {
+        1.0 - target
+    };
+    if let Node::Vertical(split) = &mut dock.main_surface_mut()[parent] {
+        split.fraction = target;
+    }
+}
+
+/// 保证“队列”面板高度不低于最小要求（第一行控件 + 一个条目）。
+/// “发送文件”与“队列”在同一纵向分组内：若分组总高不足以同时放下
+/// 固定高度的文件面板与最小高度的队列，则扩大分组在上级拆分中的份额。
+/// 只在下限方向生效：分组已足够大时保持用户设置不动。
+fn fix_queue_panel_height(
+    dock: &mut DockState<UiPanel>,
+    total_h: f32,
+    queue_min_total_h: f32,
+) {
+    let Some((queue_node, _)) = dock.main_surface().find_tab(&UiPanel::Queue) else {
+        return;
+    };
+    let standalone = dock
+        .main_surface()
+        .leaf(queue_node)
+        .map_or(true, |leaf| leaf.tabs().len() != 1);
+    if standalone {
+        return;
+    }
+    let Some(group) = queue_node.parent() else {
+        return;
+    };
+    match &dock.main_surface()[group] {
+        Node::Vertical(_) => {}
+        _ => return,
+    }
+    // 队列同级（另一侧）应是与它同组的“发送文件”
+    let other = if queue_node == group.left() {
+        group.right()
+    } else {
+        group.left()
+    };
+    let sibling_total = node_height(dock, other, total_h);
+    // 预留少量余量：吸收分组内分隔条与像素取整
+    let needed_group = sibling_total + queue_min_total_h + 8.0;
+    let group_h = node_height(dock, group, total_h);
+    if group_h >= needed_group {
+        return;
+    }
+    let Some(grand) = group.parent() else {
+        return;
+    };
+    let grand_h = node_height(dock, grand, total_h);
+    match &dock.main_surface()[grand] {
+        Node::Vertical(_) => {}
+        _ => return,
+    }
+    if grand_h <= 0.0 {
+        return;
+    }
+    let target = (needed_group / grand_h).clamp(0.05, 0.95);
+    let target = if group == grand.left() {
+        target
+    } else {
+        1.0 - target
+    };
+    if let Node::Vertical(split) = &mut dock.main_surface_mut()[grand] {
+        split.fraction = target;
+    }
+}
+
 /// 全部面板都已收起时的空布局：居中展示各面板按钮，点击即恢复。
 fn restore_panels_ui(
     ui: &mut egui::Ui,
@@ -699,6 +870,10 @@ fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
     style.separator.color_idle = egui::Color32::from_white_alpha(8);
     style.separator.color_hovered = theme::BLUE_CHECK;
     style.separator.color_dragged = theme::BLUE;
+    // 关键：separator.extra 是拖拽分割线时 fraction 的 clamp 下限约束
+    // （默认 175px），导致任何“固定为内容高度”的面板都无法低于 ~175px——
+    // DockArea 渲染时会把 fraction 强制 clamp 回来。设为 0 消除下限。
+    style.separator.extra = 0.0;
 
     style.tab_bar.height = 30.0;
     style.tab_bar.bg_fill = theme::panel();
@@ -803,6 +978,10 @@ mod tests {
             terminal_decoder_enc: None,
             terminal_cache_invalid: false,
             terminal_decoded_len: 0,
+            terminal_markers: Vec::new(),
+            terminal_markers_inserted: 0,
+            terminal_marker_spans: Vec::new(),
+            terminal_prompt: String::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
             rx_total: 0,
@@ -823,6 +1002,7 @@ mod tests {
             status_error: false,
             alert: None,
             viewport_clamped: false,
+            config_panel_body_h: 44.0,
             dock_state: Some(default_dock_state()),
         }
     }
@@ -843,7 +1023,7 @@ mod tests {
     fn default_dock_state_contains_all_panels() {
         let dock = default_dock_state();
         let tabs: Vec<UiPanel> = dock.main_surface().tabs().copied().collect();
-        assert_eq!(tabs.len(), 4);
+        assert_eq!(tabs.len(), 5);
         for panel in UiPanel::ALL {
             assert!(tabs.contains(&panel));
         }
@@ -858,8 +1038,8 @@ mod tests {
         dock.main_surface_mut().remove_tab(path);
 
         let open = current_open_panels(&dock);
-        assert!(!open[3]);
-        assert!(open[0] && open[1] && open[2]);
+        assert!(!open[4]);
+        assert!(open[0] && open[1] && open[2] && open[3]);
     }
 
     #[test]
@@ -885,13 +1065,453 @@ mod tests {
         let (file_node, _) = dock.main_surface().find_tab(&UiPanel::File).unwrap();
         let h = node_height(&dock, file_node, total_h);
         assert!((h - (tab_h + FILE_BODY_H)).abs() < 0.01);
-        // 正文高度必须不低于 egui 0.35 ScrollArea 的最小内容高度（64px），
-        // 否则内容区被强制撑高、控件会被下推并贴到面板下边沿。
-        // 编译期不变量：正文高度必须不低于 egui 0.35 ScrollArea 的最小内容高度（64px），
-        // 否则内容区被强制撑高、控件会被下推并贴到面板下边沿。
-        const _: () = assert!(
-            FILE_BODY_H >= 64.0,
-            "FILE_BODY_H 低于 ScrollArea 最小内容高度 64px，控件无法垂直居中"
+    }
+
+    #[test]
+    fn config_panel_height_is_fixed_to_content() {
+        // Config 面板关闭了 ScrollArea 的 64px 最小高度下限，高度完全由
+        // split fraction 决定；fix_config_panel_height 应将其收敛到
+        // 「tab 栏 + 上一帧实测内容高度 + tab 正文外边距」。
+        let mut dock = default_dock_state();
+        let total_h = 700.0;
+        let tab_h = 24.0;
+        let body_h = 44.0; // 上一帧实测的 flex 内容高度（单行：按钮 28 + 上下 8 边距）
+        fix_config_panel_height(&mut dock, total_h, tab_h + body_h + 8.0);
+
+        let (config_node, _) = dock.main_surface().find_tab(&UiPanel::Config).unwrap();
+        let h = node_height(&dock, config_node, total_h);
+        assert!((h - (tab_h + body_h + 8.0)).abs() < 0.01);
+        // 该高度应显著低于 ScrollArea 的 64px 下限：证明关闭滚动后
+        // dock 面板高度不再被 ScrollArea 强制撑高。
+        assert!(
+            body_h < 64.0,
+            "配置面板内容高度 {body_h} 应低于 ScrollArea 64px 下限，否则无需关闭滚动"
+        );
+    }
+
+    /// 诊断：多帧渲染默认 dock，打印 config_panel_body_h 实测值、
+    /// Config 面板实际分配高度与语言按钮矩形 y 范围。
+    #[test]
+    fn debug_config_panel_height_in_dock() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 740.0),
+            )),
+            ..Default::default()
+        };
+        let s = Language::Chinese.strings();
+        for frame in 0..5 {
+            let output = run_ui(&ctx, input.clone(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let mut dock = app.dock_state.take().expect("dock");
+                    let config_body_h = app.config_panel_body_h;
+                    let open_panels = current_open_panels(&dock);
+                    let mut viewer = DockViewer {
+                        app: &mut app,
+                        open_panels,
+                        pending_restore: None,
+                    };
+                    let style = dock_style(ui);
+                    fix_file_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + FILE_BODY_H,
+                    );
+                    fix_config_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + config_body_h,
+                    );
+                    DockArea::new(&mut dock)
+                        .style(style)
+                        .show_add_buttons(false)
+                        .show_add_popup(false)
+                        .show_close_buttons(false)
+                        .show_leaf_collapse_buttons(true)
+                        .show_leaf_close_all_buttons(false)
+                        .show_secondary_button_hint(false)
+                        .tab_context_menus(false)
+                        .show_inside(ui, &mut viewer);
+                    app.dock_state = Some(dock);
+                });
+            });
+            // Config 面板实际高度
+            let (config_node, _) = app
+                .dock_state
+                .as_ref()
+                .unwrap()
+                .main_surface()
+                .find_tab(&UiPanel::Config)
+                .unwrap();
+            let panel_h = node_height(app.dock_state.as_ref().unwrap(), config_node, 700.0);
+            // 语言按钮矩形 y 范围
+            let mut lang_rect: Option<egui::Rect> = None;
+            for clipped in &output.shapes {
+                if let egui::epaint::Shape::Text(ts) = &clipped.shape
+                    && ts.galley.job.text == s.language
+                {
+                    // 从文本反推按钮矩形（按钮高约 28，文本居中）
+                    let h = ts.galley.rect.height();
+                    lang_rect = Some(egui::Rect::from_min_max(
+                        egui::pos2(ts.pos.x, ts.pos.y - (28.0 - h) / 2.0),
+                        egui::pos2(ts.pos.x + 60.0, ts.pos.y - (28.0 - h) / 2.0 + 28.0),
+                    ));
+                }
+            }
+            println!(
+                "frame={frame} body_h={:.1} panel_h={:.1} lang_rect={:?}",
+                app.config_panel_body_h, panel_h, lang_rect
+            );
+        }
+        // 1100px 窗口下配置会换行成两行：正文高度 = 内容 60 + 2×顶部内边距
+        // ~10.5×2 ≈ 81，面板（tab 30 + body）对应 ~111。
+        let (config_node, _) = app
+            .dock_state
+            .as_ref()
+            .unwrap()
+            .main_surface()
+            .find_tab(&UiPanel::Config)
+            .unwrap();
+        let panel_h = node_height(app.dock_state.as_ref().unwrap(), config_node, 700.0);
+        assert!(
+            (app.config_panel_body_h - 81.0).abs() < 4.0,
+            "配置面板内容高度异常: body_h={:.1}（两行实测应为 ~81）",
+            app.config_panel_body_h
+        );
+        assert!(
+            panel_h < 200.0,
+            "Config 面板高度 {panel_h:.1} 仍过高（应收敛到 ~102）"
+        );
+    }
+
+    #[test]
+    fn config_panel_auto_height_fits_wrapped_rows_in_dock() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        // 窄窗口：配置必然换行到两行
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(760.0, 740.0),
+            )),
+            ..Default::default()
+        };
+        for lang in [Language::Chinese, Language::English] {
+            let mut app = make_app();
+            app.config.language = lang;
+            let s = lang.strings();
+            let mut output = None;
+            for _frame in 0..6 {
+                output = Some(run_ui(&ctx, input.clone(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                        let config_body_h = app.config_panel_body_h;
+                        let open_panels = current_open_panels(&dock);
+                        let mut viewer = DockViewer {
+                            app: &mut app,
+                            open_panels,
+                            pending_restore: None,
+                        };
+                        let style = dock_style(ui);
+                        fix_file_panel_height(
+                            &mut dock,
+                            ui.available_height(),
+                            style.tab_bar.height + FILE_BODY_H,
+                        );
+                        fix_config_panel_height(
+                            &mut dock,
+                            ui.available_height(),
+                            style.tab_bar.height + config_body_h,
+                        );
+                        DockArea::new(&mut dock)
+                            .style(style)
+                            .show_add_buttons(false)
+                            .show_add_popup(false)
+                            .show_close_buttons(false)
+                            .show_leaf_collapse_buttons(true)
+                            .show_leaf_close_all_buttons(false)
+                            .show_secondary_button_hint(false)
+                            .tab_context_menus(false)
+                            .show_inside(ui, &mut viewer);
+                        app.dock_state = Some(dock);
+                    });
+                }));
+            }
+            // 内容高度估算应显著大于单行估计 44（至少两行）
+            assert!(
+                app.config_panel_body_h >= 56.0,
+                "[{lang:?}] 换行后未按多行内容自适应: body_h={:.1}",
+                app.config_panel_body_h
+            );
+            // 配置面板正文（viewport）必须容下最后一行控件：所有 label 文本
+            // 都应完整落在正文区内，不得被裁剪。
+            let (config_node, _) = app
+                .dock_state
+                .as_ref()
+                .unwrap()
+                .main_surface()
+                .find_tab(&UiPanel::Config)
+                .unwrap();
+            let viewport = app
+                .dock_state
+                .as_ref()
+                .unwrap()
+                .main_surface()
+                .leaf(config_node)
+                .unwrap()
+                .viewport;
+            let out = output.expect("至少渲染一帧");
+            let labels = [
+                s.language,
+                s.theme,
+                s.open_port,
+                s.auto_refresh,
+                s.baud_rate,
+                s.data_bits,
+                s.stop_bits,
+                s.parity,
+                s.flow_control,
+            ];
+            let mut found = 0;
+            for clipped in &out.shapes {
+                if let egui::epaint::Shape::Text(ts) = &clipped.shape {
+                    let text = &ts.galley.job.text;
+                    if !labels.contains(&text.as_str()) {
+                        continue;
+                    }
+                    found += 1;
+                    let top = ts.pos.y;
+                    let bottom = top + ts.galley.rect.height();
+                    assert!(
+                        top >= viewport.top() - 0.5 && bottom <= viewport.bottom() + 0.5,
+                        "[{lang:?}] 配置面板控件被裁剪: {text} y 范围 {top:.1}..{bottom:.1}，正文区 {:.1}..{:.1}",
+                        viewport.top(),
+                        viewport.bottom()
+                    );
+                }
+            }
+            assert_eq!(found, labels.len(), "[{lang:?}] 应找到全部配置面板文本");
+        }
+    }
+
+    #[test]
+    fn config_panel_auto_height_fits_all_widths() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        for width in [900.0f32, 1100.0, 1280.0, 1440.0, 1600.0, 1920.0] {
+            let mut app = make_app();
+            app.config.language = Language::Chinese;
+            let s = Language::Chinese.strings();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 800.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = None;
+            for _frame in 0..4 {
+                output = Some(run_ui(&ctx, input.clone(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                        let config_body_h = app.config_panel_body_h;
+                        let open_panels = current_open_panels(&dock);
+                        let mut viewer = DockViewer {
+                            app: &mut app,
+                            open_panels,
+                            pending_restore: None,
+                        };
+                        let style = dock_style(ui);
+                        fix_file_panel_height(
+                            &mut dock,
+                            ui.available_height(),
+                            style.tab_bar.height + FILE_BODY_H,
+                        );
+                        fix_config_panel_height(
+                            &mut dock,
+                            ui.available_height(),
+                            style.tab_bar.height + config_body_h,
+                        );
+                        DockArea::new(&mut dock)
+                            .style(style)
+                            .show_add_buttons(false)
+                            .show_add_popup(false)
+                            .show_close_buttons(false)
+                            .show_leaf_collapse_buttons(true)
+                            .show_leaf_close_all_buttons(false)
+                            .show_secondary_button_hint(false)
+                            .tab_context_menus(false)
+                            .show_inside(ui, &mut viewer);
+                        app.dock_state = Some(dock);
+                    });
+                }));
+            }
+            let (config_node, _) = app
+                .dock_state
+                .as_ref()
+                .unwrap()
+                .main_surface()
+                .find_tab(&UiPanel::Config)
+                .unwrap();
+            let viewport = app
+                .dock_state
+                .as_ref()
+                .unwrap()
+                .main_surface()
+                .leaf(config_node)
+                .unwrap()
+                .viewport;
+            let out = output.expect("frame");
+            let mut ys = Vec::new();
+            let mut max_bottom = f32::MIN;
+            let mut missing = Vec::new();
+            for clipped in &out.shapes {
+                if let egui::epaint::Shape::Text(ts) = &clipped.shape {
+                    let t = &ts.galley.job.text;
+                    if [
+                        s.language,
+                        s.theme,
+                        s.open_port,
+                        s.auto_refresh,
+                        s.baud_rate,
+                        s.data_bits,
+                        s.stop_bits,
+                        s.parity,
+                        s.flow_control,
+                    ]
+                    .contains(&t.as_str())
+                    {
+                        ys.push((t.clone(), ts.pos.y));
+                        max_bottom = max_bottom.max(ts.pos.y + ts.galley.rect.height());
+                    }
+                }
+            }
+            for label in [
+                s.language,
+                s.theme,
+                s.open_port,
+                s.auto_refresh,
+                s.baud_rate,
+                s.data_bits,
+                s.stop_bits,
+                s.parity,
+                s.flow_control,
+            ] {
+                if !ys.iter().any(|(t, _)| t == label) {
+                    missing.push(label);
+                }
+            }
+            assert!(
+                missing.is_empty(),
+                "width={width} 缺失控件: {missing:?}"
+            );
+            assert!(
+                max_bottom <= viewport.bottom() + 0.5,
+                "width={width} 控件被裁剪: max_bottom={max_bottom:.1} 超出正文区 {:.1}",
+                viewport.bottom()
+            );
+            // 面板上下留白应一致：内容顶部到正文顶 ≈ 正文底到内容底部
+            let min_top = ys
+                .iter()
+                .map(|(_, y)| *y)
+                .fold(f32::MAX, f32::min);
+            let top_pad = min_top - viewport.top();
+            let bottom_pad = viewport.bottom() - max_bottom;
+            assert!(
+                (top_pad - bottom_pad).abs() < 1.5,
+                "width={width} 配置面板上下留白不一致: top={top_pad:.1} bottom={bottom_pad:.1}",
+            );
+        }
+    }
+
+    #[test]
+    fn baud_frame_height_matches_port_combo_in_dock() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        app.baud_input = "115200".to_owned();
+        app.config.port.baud_rate = 115200;
+        let s = Language::Chinese.strings();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let output = run_ui(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                let config_body_h = app.config_panel_body_h;
+                let open_panels = current_open_panels(&dock);
+                let mut viewer = DockViewer {
+                    app: &mut app,
+                    open_panels,
+                    pending_restore: None,
+                };
+                let style = dock_style(ui);
+                fix_file_panel_height(
+                    &mut dock,
+                    ui.available_height(),
+                    style.tab_bar.height + FILE_BODY_H,
+                );
+                fix_config_panel_height(
+                    &mut dock,
+                    ui.available_height(),
+                    style.tab_bar.height + config_body_h,
+                );
+                DockArea::new(&mut dock)
+                    .style(style)
+                    .show_add_buttons(false)
+                    .show_add_popup(false)
+                    .show_close_buttons(false)
+                    .show_leaf_collapse_buttons(true)
+                    .show_leaf_close_all_buttons(false)
+                    .show_secondary_button_hint(false)
+                    .tab_context_menus(false)
+                    .show_inside(ui, &mut viewer);
+                app.dock_state = Some(dock);
+            });
+        });
+        let rect_of = |text: &str| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::epaint::Shape::Rect(rs)
+                        if (20.0..=40.0).contains(&rs.rect.height())
+                            && output.shapes.iter().any(|c2| {
+                                matches!(&c2.shape, egui::epaint::Shape::Text(ts)
+                                    if ts.galley.job.text == text
+                                        && rs.rect.contains(egui::pos2(
+                                            ts.pos.x + 2.0,
+                                            ts.pos.y + 2.0,
+                                        )))
+                            }) =>
+                    {
+                        Some(rs.rect)
+                    }
+                    _ => None,
+                })
+                .max_by(|a, b| a.height().total_cmp(&b.height()))
+        };
+        let baud_frame = rect_of("115200").expect("应找到波特率输入框矩形");
+        let port_combo = rect_of(s.port_placeholder).expect("应找到端口下拉框矩形");
+        assert!(
+            (baud_frame.height() - port_combo.height()).abs() < 1.0,
+            "dock 中波特率输入框高度 {:.1} 与端口下拉框高度 {:.1} 不一致",
+            baud_frame.height(),
+            port_combo.height()
         );
     }
 
@@ -956,7 +1576,7 @@ mod tests {
                         file_tab_title_top = ts.pos.y;
                         file_tab_title_h = ts.galley.rect.height();
                     }
-                } else if text == s.queue && ts.pos.y < queue_tab_title_top {
+                } else if text == s.queue_area && ts.pos.y < queue_tab_title_top {
                     queue_tab_title_top = ts.pos.y;
                     queue_tab_title_h = ts.galley.rect.height();
                 }
@@ -1163,4 +1783,302 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn local_echo_controls_tx_display_in_non_terminal_mode() {
+        // 本地回显（原“显示发送”）在非终端模式下控制发送数据显示：
+        // 开启时记录 [TX] 段，关闭后不再显示。
+        let mut app = make_app();
+        app.config.terminal_mode = false;
+        app.handle_event(Event::Tx(b"world".to_vec()));
+        assert_eq!(app.display_segments.len(), 1);
+        assert!(
+            app.display_segments[0].marker.contains("[TX]"),
+            "本地回显开启时应记录 [TX] 段"
+        );
+        app.config.terminal_auto_echo = false;
+        app.display_segments.clear();
+        app.handle_event(Event::Tx(b"again".to_vec()));
+        assert!(
+            app.display_segments.is_empty(),
+            "关闭本地回显后不应显示发送数据"
+        );
+    }
+
+    #[test]
+    fn send_panel_symmetric_padding_and_internal_scroll() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        app.send_input = "line\n".repeat(80); // 触发输入框内部滚动
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 740.0),
+            )),
+            ..Default::default()
+        };
+        let output = run_ui(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                let config_body_h = app.config_panel_body_h;
+                let open_panels = current_open_panels(&dock);
+                let mut viewer = DockViewer {
+                    app: &mut app,
+                    open_panels,
+                    pending_restore: None,
+                };
+                let style = dock_style(ui);
+                fix_file_panel_height(
+                    &mut dock,
+                    ui.available_height(),
+                    style.tab_bar.height + FILE_BODY_H,
+                );
+                fix_config_panel_height(
+                    &mut dock,
+                    ui.available_height(),
+                    style.tab_bar.height + config_body_h,
+                );
+                DockArea::new(&mut dock)
+                    .style(style)
+                    .show_add_buttons(false)
+                    .show_add_popup(false)
+                    .show_close_buttons(false)
+                    .show_leaf_collapse_buttons(true)
+                    .show_leaf_close_all_buttons(false)
+                    .show_secondary_button_hint(false)
+                    .tab_context_menus(false)
+                    .show_inside(ui, &mut viewer);
+                app.dock_state = Some(dock);
+            });
+        });
+        let (send_node, _) = app
+            .dock_state
+            .as_ref()
+            .unwrap()
+            .main_surface()
+            .find_tab(&UiPanel::Send)
+            .unwrap();
+        let viewport = app
+            .dock_state
+            .as_ref()
+            .unwrap()
+            .main_surface()
+            .leaf(send_node)
+            .unwrap()
+            .viewport;
+        // 发送按钮（主题蓝，位于面板内）：取其下缘
+        let send_button_bottom = output
+            .shapes
+            .iter()
+            .filter_map(|c| {
+                if let egui::epaint::Shape::Rect(rs) = &c.shape {
+                    (rs.fill == theme::BLUE
+                        && rs.rect.top() >= viewport.top()
+                        && rs.rect.bottom() <= viewport.bottom() + 1.0)
+                        .then_some(rs.rect.bottom())
+                } else {
+                    None
+                }
+            })
+            .max_by(|a, b| a.total_cmp(b))
+            .expect("应找到发送按钮");
+        // 输入框背景：面板内宽 > 500、高 24..90、位于按钮行上方的矩形
+        // （不按颜色识别，避免并行测试主题竞态）
+        let input_box = output
+            .shapes
+            .iter()
+            .filter_map(|c| {
+                if let egui::epaint::Shape::Rect(rs) = &c.shape {
+                    (rs.rect.width() > 500.0
+                        && (24.0..=90.0).contains(&rs.rect.height())
+                        && rs.rect.top() >= viewport.top() - 1.0
+                        && rs.rect.bottom() <= send_button_bottom + 1.0)
+                        .then_some(rs.rect)
+                } else {
+                    None
+                }
+            })
+            .max_by(|a, b| a.height().total_cmp(&b.height()))
+            .expect("应找到发送输入框");
+        // 顶部/底部可视留白一致
+        let top_pad = input_box.top() - viewport.top();
+        let bottom_pad = viewport.bottom() - send_button_bottom;
+        assert!(
+            (top_pad - bottom_pad).abs() < 2.0,
+            "发送面板上下留白不一致: top={top_pad:.1} bottom={bottom_pad:.1}"
+        );
+        // 输入框不越过按钮行
+        assert!(
+            input_box.bottom() <= send_button_bottom - 2.0,
+            "输入框与按钮行重叠"
+        );
+    }
+
+    #[test]
+    fn default_dock_file_slim_and_queue_min_height() {
+        let ctx = egui::Context::default();
+        setup_fonts(&ctx);
+        theme::apply(&ctx);
+        let mut app = make_app();
+        app.config.language = Language::Chinese;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1100.0, 740.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = None;
+        for _frame in 0..3 {
+            output = Some(run_ui(&ctx, input.clone(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                    let config_body_h = app.config_panel_body_h;
+                    let open_panels = current_open_panels(&dock);
+                    let mut viewer = DockViewer {
+                        app: &mut app,
+                        open_panels,
+                        pending_restore: None,
+                    };
+                    let style = dock_style(ui);
+                    fix_file_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + FILE_BODY_H,
+                    );
+                    fix_config_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + config_body_h,
+                    );
+                    fix_queue_panel_height(
+                        &mut dock,
+                        ui.available_height(),
+                        style.tab_bar.height + QUEUE_BODY_MIN,
+                    );
+                    DockArea::new(&mut dock)
+                        .style(style)
+                        .show_add_buttons(false)
+                        .show_add_popup(false)
+                        .show_close_buttons(false)
+                        .show_leaf_collapse_buttons(true)
+                        .show_leaf_close_all_buttons(false)
+                        .show_secondary_button_hint(false)
+                        .tab_context_menus(false)
+                        .show_inside(ui, &mut viewer);
+                    app.dock_state = Some(dock);
+                });
+            }));
+        }
+        let dock = app.dock_state.as_ref().unwrap();
+        let body_of = |p: UiPanel| -> egui::Rect {
+            let (n, _) = dock.main_surface().find_tab(&p).unwrap();
+            dock.main_surface().leaf(n).unwrap().viewport
+        };
+        let file_body = body_of(UiPanel::File);
+        let queue_body = body_of(UiPanel::Queue);
+        let _ = output;
+        assert!(
+            (file_body.height() - FILE_BODY_H).abs() < 3.0,
+            "文件面板正文高 {:.1} 应接近 FILE_BODY_H {FILE_BODY_H}",
+            file_body.height()
+        );
+        assert!(
+            queue_body.height() >= QUEUE_BODY_MIN - 2.0,
+            "队列面板正文高 {:.1} 应不小于 QUEUE_BODY_MIN {QUEUE_BODY_MIN}",
+            queue_body.height()
+        );
+    }
+
+    #[test]
+    fn queue_item_rows_auto_width_and_no_hidden_controls() {
+        // 窗口收窄时，队列条目内容文本框必须“吃掉”剩余宽度整体收缩；
+        // 右侧 发送/延时/移动/复制/删除 控件必须始终完整可见（不能被行尾裁掉）。
+        let mut content_w = Vec::new();
+        let mut seg_counts = Vec::new();
+        for width in [1100.0f32, 700.0, 520.0, 460.0, 400.0] {
+            let ctx = egui::Context::default();
+            setup_fonts(&ctx);
+            let mut app = make_app();
+            app.config.language = Language::Chinese;
+            let q = &mut app.config.queues[0];
+            q.items.clear();
+            q.items.push(crate::config::QueueItem {
+                mode: crate::config::SendMode::Text,
+                content: "hello queue item content long".to_owned(),
+                delay_ms: 100,
+                selected: true,
+            });
+            q.items.push(crate::config::QueueItem::default());
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 240.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = None;
+            for _ in 0..3 {
+                out = Some(run_ui(&ctx, input.clone(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.set_width(width - 16.0);
+                        app.queue_panel(ui);
+                    });
+                }));
+            }
+            let output = out.unwrap();
+            let mut widths = Vec::new();
+            let mut segments = 0usize;
+            for clipped in &output.shapes {
+                match &clipped.shape {
+                    egui::epaint::Shape::Rect(rs) => {
+                        // 内容文本框：位于行内 x≈128 起、高约 24px 的背景矩形
+                        if rs.rect.left() > 100.0
+                            && rs.rect.top() > 35.0
+                            && (23.0..=26.0).contains(&rs.rect.height())
+                        {
+                            widths.push(rs.rect.width());
+                        }
+                    }
+                    egui::epaint::Shape::LineSegment { .. } => segments += 1,
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                widths.len(),
+                2,
+                "width={width} 应渲染出 2 个队列条目的内容文本框"
+            );
+            let max_w = widths.into_iter().fold(f32::MIN, f32::max);
+            content_w.push((width, max_w));
+            seg_counts.push((width, segments));
+            if width >= 460.0 {
+                assert!(
+                    segments > 0,
+                    "width={width} 下队列行右侧图标控件应完整绘制"
+                );
+            }
+        }
+        // 内容文本框宽度随窗口收窄而同步收缩（1100 > 700 > 520 > 460）
+        for pair in content_w.windows(2) {
+            let (_, a) = pair[0];
+            let (w2, b) = pair[1];
+            assert!(
+                a > b,
+                "宽度 {:.0}px 时内容文本框 {a:.1}px 未比 {:.0}px 时的 {b:.1}px 更窄",
+                pair[0].0, w2
+            );
+        }
+        // 460px（仍放得下最小内容框）时右侧控件绘制数量与 700px 完全一致，未被裁剪
+        let seg_700 = seg_counts[1].1;
+        let seg_460 = seg_counts[3].1;
+        assert_eq!(
+            seg_460, seg_700,
+            "460px 下右侧图标绘制数 {seg_460} 应与 700px 的 {seg_700} 一致（不得被裁剪）"
+        );
+    }
+
 }

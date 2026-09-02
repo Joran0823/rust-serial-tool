@@ -2,7 +2,7 @@
 //! 常量保留历史值（深色）以便兼容；新代码使用 getter 函数。
 
 use eframe::egui;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 
 // ---- 深色主题色 ----
 const BG_D: egui::Color32 = egui::Color32::from_rgb(0x13, 0x17, 0x1D);
@@ -35,10 +35,19 @@ pub const TERMINAL_PROMPT: egui::Color32 = egui::Color32::from_rgb(0x2F, 0xD4, 0
 pub const CORNER: u8 = 6;
 
 // ---- 主题状态 ----
-static IS_DARK: AtomicBool = AtomicBool::new(true);
+// 用线程局部变量而非全局原子量：egui UI 只在单线程渲染，而并行测试各自在
+// 独立线程中设置/渲染主题，全局状态会让“亮色主题”测试读到别线程写入的深色值。
+thread_local! {
+    static IS_DARK: Cell<bool> = const { Cell::new(true) };
+}
 
 pub fn is_dark() -> bool {
-    IS_DARK.load(Ordering::Relaxed)
+    IS_DARK.with(|dark| dark.get())
+}
+
+/// 仅模块内部（及同模块测试）写入当前线程的主题状态。
+fn set_dark(is_dark: bool) {
+    IS_DARK.with(|dark| dark.set(is_dark));
 }
 
 // ---- 主题感知 getter ----
@@ -54,6 +63,15 @@ pub fn status_bg() -> egui::Color32 {
 }
 pub fn input_bg() -> egui::Color32 {
     if is_dark() { INPUT_BG_D } else { INPUT_BG_L }
+}
+/// 禁用状态下输入类控件（如下拉框）的背景：深浅主题分别取合适的灰阶，
+/// 不能直接复用深色值，否则亮色主题下会变成黑色块。
+pub fn input_bg_disabled() -> egui::Color32 {
+    if is_dark() {
+        egui::Color32::from_rgb(0x18, 0x1D, 0x24)
+    } else {
+        egui::Color32::from_rgb(0xE9, 0xEB, 0xEF)
+    }
 }
 pub fn btn_gray() -> egui::Color32 {
     if is_dark() { BTN_GRAY_D } else { BTN_GRAY_L }
@@ -94,7 +112,7 @@ pub fn apply(ctx: &egui::Context) {
 
 /// 根据系统主题设置应用：None 表示跟随系统。
 pub fn apply_theme(ctx: &egui::Context, is_dark: bool) {
-    IS_DARK.store(is_dark, Ordering::Relaxed);
+    set_dark(is_dark);
     let (dark_vis, light_vis) = (dark_visuals(), light_visuals());
     ctx.set_style_of(egui::Theme::Dark, base_style(dark_vis.clone()));
     ctx.set_style_of(egui::Theme::Light, base_style(light_vis.clone()));
@@ -297,13 +315,13 @@ mod tests {
     #[test]
     fn theme_getters_return_valid_colors() {
         for dark in [true, false] {
-            IS_DARK.store(dark, Ordering::Relaxed);
+            set_dark(dark);
             assert_ne!(bg(), egui::Color32::TRANSPARENT);
             assert_ne!(panel(), egui::Color32::TRANSPARENT);
             assert_ne!(text(), egui::Color32::TRANSPARENT);
             assert_ne!(text_soft(), egui::Color32::TRANSPARENT);
             assert_ne!(input_bg(), egui::Color32::TRANSPARENT);
         }
-        IS_DARK.store(true, Ordering::Relaxed);
+        set_dark(true);
     }
 }

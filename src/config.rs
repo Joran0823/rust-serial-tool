@@ -339,9 +339,6 @@ pub struct Config {
     pub display_mode: DisplayMode,
     pub text_encoding: TextEncoding,
     pub autoscroll: bool,
-    /// 是否在数据展示区显示发送的数据
-    #[serde(default = "default_true")]
-    pub show_sent_data: bool,
     /// 是否在数据展示区显示时间戳（默认勾选）
     #[serde(default = "default_true")]
     pub show_timestamps: bool,
@@ -357,7 +354,8 @@ pub struct Config {
     /// 接收区终端模式：深色背景、无时间戳、支持 ANSI 颜色，接收区可直接键盘输入
     #[serde(default = "default_false")]
     pub terminal_mode: bool,
-    /// 终端模式下本地回显输入内容（对端无回显时使用）；默认勾选
+    /// 本地回显：非终端模式下在展示区显示发送的数据（[TX] 标记），
+    /// 终端模式下回显键盘输入内容（对端无回显时使用）；默认勾选
     #[serde(default = "default_true")]
     pub terminal_auto_echo: bool,
     /// 终端模式：仅按回车时发送整行（回车字符一并发送）；关闭后按键即发
@@ -375,7 +373,6 @@ impl Default for Config {
             display_mode: DisplayMode::Text,
             text_encoding: TextEncoding::Utf8,
             autoscroll: true,
-            show_sent_data: true,
             show_timestamps: true,
             send_mode: SendMode::Text,
             line_ending: LineEnding::None,

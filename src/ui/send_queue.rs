@@ -14,6 +14,10 @@ use eframe::egui;
 impl SerialApp {
     /// 队列区：头部（队列选择/删除/复制/新建/导出/导入/清空/添加/队列发送）+ 条目列表。
     pub fn queue_panel(&mut self, ui: &mut egui::Ui) {
+        // 记录面板真实可见宽度：egui 在子控件横向溢出时会同步扩展 ui.max_rect，
+        // 若不在此锁定，头部按钮行溢出后条目列表会按被撑大的“可用宽度”排版，
+        // 导致行尾控件超出面板被裁剪。
+        let panel_w = ui.available_width();
         let s = self.t();
         // ---- 队列级操作行：固定 33px 高度容器，避免在剩余高度内垂直居中产生偏移 ----
         ui.allocate_ui_with_layout(
@@ -157,9 +161,13 @@ impl SerialApp {
             let queue = &mut self.config.queues[sel];
 
             let list_h = ui.available_height().max(40.0);
-            egui::ScrollArea::vertical()
+            // 双向滚动 + “按需显示”：通常宽度足够时内容文本框吃掉剩余宽度、
+            // 行宽与视口一致，不出现横向滚动条；当窗口窄到连“固定控件 +
+            // 最小文本框”都放不下时自动出现横向滚动条，保证右侧按钮可达。
+            egui::ScrollArea::both()
                 .id_salt("queue_items")
                 .auto_shrink([false, false])
+                .max_width(panel_w)
                 .max_height(list_h)
                 .show(ui, |ui| {
                     if queue.items.is_empty() {
@@ -174,13 +182,16 @@ impl SerialApp {
                     let send_w = 72.0;
                     let delay_w = 86.0;
                     let icon_w = 18.0;
+                    // 行内固定控件总宽（不含内容文本框）
                     let fixed = sel_w
                         + mode_w
                         + send_w
                         + delay_w
                         + icon_w * 4.0
                         + spacing * 8.0;
-                    let content_w = (ui.available_width() - fixed).max(80.0);
+                    // 内容文本框占满剩余宽度；最小 24px（egui TextEdit 内部同样有
+                    // 24px 下限）。留 1px 余量避免像素取整后行尾越界。
+                    let content_w = (ui.available_width() - fixed - 1.0).max(24.0);
 
                     for i in 0..queue.items.len() {
                         let item = &mut queue.items[i];

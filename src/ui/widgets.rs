@@ -106,7 +106,7 @@ pub fn combo(
         let fill = if enabled {
             theme::input_bg()
         } else {
-            egui::Color32::from_rgb(0x18, 0x1D, 0x24)
+            theme::input_bg_disabled()
         };
         // 背景 + 边框
         ui.painter()

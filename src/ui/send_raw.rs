@@ -10,20 +10,35 @@ use crate::ui::widgets;
 use eframe::egui;
 
 impl SerialApp {
-    /// 发送文本框（可读写，填充父控件大小）。
+    /// 发送文本框（可读写）：内部滚动条，文本超出高度时在框内滚动，
+    /// 不再依赖 dock 的整体滚动条。
     pub fn send_input_box(&mut self, ui: &mut egui::Ui) {
         let s = self.t();
-        let resp = ui.add_sized(
-            [ui.available_width(), ui.available_height()],
-            egui::TextEdit::multiline(&mut self.send_input)
-                .font(egui::TextStyle::Monospace)
-                .horizontal_align(egui::Align::Min)
-                .vertical_align(egui::Align::Min)
-                .hint_text(s.send_input_hint)
-                .desired_width(f32::INFINITY)
-                .background_color(theme::input_bg()),
-        );
-        widgets::text_edit_context_menu(ui, &resp, true, &self.send_input, s);
+        egui::Frame::new()
+            .fill(theme::input_bg())
+            .corner_radius(4)
+            .inner_margin(egui::Margin::symmetric(4, 2))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("send_input_scroll")
+                    .auto_shrink([false, false])
+                    // ScrollArea 默认 min_scrolled_size=64px，会把输入框撑高；
+                    // 高度完全由面板布局决定，文本内部滚动。
+                    .min_scrolled_height(0.0)
+                    .show(ui, |ui| {
+                        let resp = ui.add(
+                            egui::TextEdit::multiline(&mut self.send_input)
+                                .font(egui::TextStyle::Monospace)
+                                .horizontal_align(egui::Align::Min)
+                                .vertical_align(egui::Align::Min)
+                                .hint_text(s.send_input_hint)
+                                .desired_width(f32::INFINITY)
+                                .frame(egui::Frame::NONE)
+                                .background_color(egui::Color32::TRANSPARENT),
+                        );
+                        widgets::text_edit_context_menu(ui, &resp, true, &self.send_input, s);
+                    });
+            });
     }
 
     /// 发送按钮行（发送/清空发送/添加到队列/模式/行尾/历史/定时发送/间隔，全部垂直居中）。

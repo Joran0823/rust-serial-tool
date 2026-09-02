@@ -12,14 +12,12 @@ chrono = "0.4.45"
 directories = "6.0.0"
 eframe = "0.36"
 egui_dock = "0.21"
-egui_flex = "0.8"
 encoding_rs = "0.8.35"
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
-serialport = "4.9.0"
+serialport = "4.10.0"
 sys-locale = "0.3.2"
-thiserror = "2.0.19"
 toml = "1.1.4"
 
 [build-dependencies]

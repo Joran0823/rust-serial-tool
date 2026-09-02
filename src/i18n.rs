@@ -54,7 +54,8 @@ pub struct Strings {
     pub status_not_connected: &'static str,
     pub status_periodic: &'static str,
 
-    // 串口配置行
+    // 配置行
+    pub port_config: &'static str,
     pub port_placeholder: &'static str,
     pub port_tip: &'static str,
     pub baud_rate: &'static str,
@@ -94,8 +95,6 @@ pub struct Strings {
     pub pause_receive_tip: &'static str,
     pub auto_refresh: &'static str,
     pub auto_refresh_tip: &'static str,
-    pub show_sent: &'static str,
-    pub show_sent_tip: &'static str,
     pub record_log: &'static str,
     pub record_log_tip: &'static str,
     pub log_filter: &'static str,
@@ -125,6 +124,7 @@ pub struct Strings {
 
     // 发送区
     pub send: &'static str,
+    pub send_area: &'static str,
     pub send_tip: &'static str,
     pub send_input_hint: &'static str,
     pub clear_send: &'static str,
@@ -146,6 +146,7 @@ pub struct Strings {
 
     // 队列区
     pub queue: &'static str,
+    pub queue_area: &'static str,
     pub queue_tip: &'static str,
     pub delete: &'static str,
     pub delete_queue_tip: &'static str,
@@ -287,6 +288,7 @@ pub const ZH: Strings = Strings {
     open_port: "打开串口",
     close_port: "关闭串口",
     open_close_tip: "打开/关闭当前配置的串口",
+    port_config: "配置",
     language: "语言",
     language_tip: "选择界面语言",
     theme: "主题",
@@ -306,8 +308,6 @@ pub const ZH: Strings = Strings {
     pause_receive_tip: "暂停刷新展示区，统计与日志照常记录",
     auto_refresh: "自动刷新端口",
     auto_refresh_tip: "每 5 秒自动检测串口列表",
-    show_sent: "显示发送",
-    show_sent_tip: "在接收区显示发送的数据（带 [TX] 标记）",
     record_log: "记录日志",
     record_log_tip: "勾选后自动选择日志文件路径并开始记录",
     log_filter: "日志",
@@ -335,6 +335,7 @@ pub const ZH: Strings = Strings {
     progress_bytes: "{sent}/{total} 字节",
 
     send: "发送",
+    send_area: "发送区",
     send_tip: "以当前模式发送输入框内容",
     send_input_hint: "请输入内容…",
     clear_send: "清空发送",
@@ -355,6 +356,7 @@ pub const ZH: Strings = Strings {
     periodic_running: "● 定时发送运行中",
 
     queue: "队列",
+    queue_area: "队列发送",
     queue_tip: "选择当前编辑/发送的队列",
     delete: "删除",
     delete_queue_tip: "删除当前队列",
@@ -398,7 +400,7 @@ pub const ZH: Strings = Strings {
     terminal_mode: "终端模式",
     terminal_mode_tip: "终端模式：深色背景、无时间戳、支持 ANSI 颜色，接收区可直接键盘输入",
     auto_echo: "本地回显",
-    auto_echo_tip: "对端无回显时，在终端中本地显示输入内容（需启用终端模式）",
+    auto_echo_tip: "对端无回显时，在展示区显示发送的数据、终端模式回显键盘输入",
     enter_sends: "回车发送",
     enter_sends_tip: "仅按回车键时发送整行（回车字符一并发送）；关闭后按键即发（需启用终端模式）",
     terminal_empty: "等待数据…",
@@ -482,6 +484,7 @@ pub const EN: Strings = Strings {
     open_port: "Open Port",
     close_port: "Close Port",
     open_close_tip: "Open/close the configured serial port",
+    port_config: "Config",
     language: "Language",
     language_tip: "Choose the UI language",
     theme: "Theme",
@@ -501,8 +504,6 @@ pub const EN: Strings = Strings {
     pause_receive_tip: "Pause display updates; stats and logging continue",
     auto_refresh: "Auto refresh port",
     auto_refresh_tip: "Detect serial ports every 5 seconds",
-    show_sent: "Show sent",
-    show_sent_tip: "Show sent data in the receive area (marked [TX])",
     record_log: "Record log",
     record_log_tip: "Choose a log file path and start recording",
     log_filter: "Log",
@@ -530,6 +531,7 @@ pub const EN: Strings = Strings {
     progress_bytes: "{sent}/{total} bytes",
 
     send: "Send",
+    send_area: "Send Area",
     send_tip: "Send the input box content with the current mode",
     send_input_hint: "Enter content…",
     clear_send: "Clear",
@@ -550,6 +552,7 @@ pub const EN: Strings = Strings {
     periodic_running: "● Periodic sending",
 
     queue: "Queue",
+    queue_area: "Queue Send",
     queue_tip: "Choose the queue to edit/send",
     delete: "Delete",
     delete_queue_tip: "Delete the current queue",
@@ -593,7 +596,7 @@ pub const EN: Strings = Strings {
     terminal_mode: "Terminal",
     terminal_mode_tip: "Terminal mode: dark background, no timestamps, ANSI colors, keyboard input",
     auto_echo: "Local echo",
-    auto_echo_tip: "Show typed input locally when the peer does not echo (requires terminal mode)",
+    auto_echo_tip: "Show sent data locally when the peer does not echo (echo typed input in terminal mode)",
     enter_sends: "Enter sends",
     enter_sends_tip: "Send the line only on Enter (including the Enter character); off = send as you type (requires terminal mode)",
     terminal_empty: "Waiting for data…",
