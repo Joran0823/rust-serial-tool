@@ -104,13 +104,13 @@ pub fn combo(
 
     if ui.is_rect_visible(resp.rect) {
         let fill = if enabled {
-            egui::Color32::WHITE
+            theme::input_bg()
         } else {
-            egui::Color32::from_gray(235)
+            theme::input_bg_disabled()
         };
         // 背景 + 边框
         ui.painter()
-            .rect(rect, 4.0, fill, theme::BORDER, egui::StrokeKind::Inside);
+            .rect(rect, 4.0, fill, theme::border(), egui::StrokeKind::Inside);
 
         // 选中文本：左对齐、垂直居中，预留右侧箭头空间（超长自动裁剪）
         let text_rect = egui::Rect::from_min_max(
@@ -124,7 +124,7 @@ pub fn combo(
                 egui::Align2::LEFT_CENTER,
                 text,
                 egui::FontId::proportional(14.0),
-                theme::TEXT,
+                theme::text(),
             );
         }
 
@@ -135,7 +135,7 @@ pub fn combo(
         );
         ui.painter().add(egui::Shape::convex_polygon(
             vec![tri.left_top(), tri.right_top(), tri.center_bottom()],
-            theme::TEXT,
+            theme::text(),
             egui::Stroke::NONE,
         ));
     }
@@ -156,16 +156,27 @@ mod tests {
 
     #[test]
     fn select_all_state_survives_next_frame() {
+        // 必须使用默认字体：egui 0.36 中 TextEdit 会把选区 clamp 到 galley 实际
+        // 字符范围，空字体（FontDefinitions::empty()）下 galley 为空（0 字符），
+        // 全选区 (0..5) 会被 clamp 成 (0..0)，误判为"选区被折叠"。
         let ctx = egui::Context::default();
-        ctx.set_fonts(egui::FontDefinitions::empty()); // 测试无需加载字体
         let mut text = String::from("hello");
 
         for frame in 0..3 {
-            let _ = ctx.run_ui(Default::default(), |ui| {
-                let out = egui::TextEdit::singleline(&mut text).show(ui);
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                // 固定 id：跨帧读取同一个 TextEditState。
+                // 若用自动 id，每帧 `TextEdit` 都会生成新的 id，
+                // 上一帧写入的选区状态在下一帧渲染时根本不会被读取。
+                let out = egui::TextEdit::singleline(&mut text)
+                    .id(egui::Id::new("test_textedit"))
+                    .show(ui);
                 if frame == 1 {
-                    // 模拟右键菜单点击“全选”
+                    // 模拟右键菜单点击“全选”：写入选区并保持焦点。
+                    // egui 0.36 起 TextEdit 渲染时若无焦点会把非空选区折叠成单点
+                    // 光标（owns_ime_events = has_focus），生产路径 text_edit_context_menu
+                    // 全选后必 request_focus，测试必须同步模拟，否则选区被折叠。
                     select_all_text(ui.ctx(), out.response.id, &text);
+                    ui.memory_mut(|mem| mem.request_focus(out.response.id));
                 }
                 if frame == 2 {
                     // 下一帧重新渲染后，选区应仍是全选范围
@@ -180,6 +191,8 @@ mod tests {
                     );
                 }
             });
+            // egui 0.36 起 `FullOutput` 携带纹理增量，测试不渲染到屏幕需要先 clear
+            out.textures_delta.clear();
         }
     }
 

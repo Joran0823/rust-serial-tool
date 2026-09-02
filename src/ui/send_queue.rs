@@ -1,5 +1,5 @@
-//! 发送区与队列区。
-//! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的发送区与队列区。
+//! 队列发送面板：队列管理、条目编辑、队列发送。
+//! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的队列区。
 
 use crate::app::SerialApp;
 use crate::codec;
@@ -12,130 +12,12 @@ use crate::ui::widgets;
 use eframe::egui;
 
 impl SerialApp {
-    /// 布局3-子1：发送文本框（可读写，填充父控件大小）。
-    pub fn send_input_box(&mut self, ui: &mut egui::Ui) {
-        let s = self.t();
-        let resp = ui.add_sized(
-            [ui.available_width(), ui.available_height()],
-            egui::TextEdit::multiline(&mut self.send_input)
-                .font(egui::TextStyle::Monospace)
-                .horizontal_align(egui::Align::Min)
-                .vertical_align(egui::Align::Min)
-                .hint_text(s.send_input_hint)
-                .desired_width(f32::INFINITY)
-                .background_color(egui::Color32::WHITE),
-        );
-        widgets::text_edit_context_menu(ui, &resp, true, &self.send_input, s);
-    }
-
-    /// 布局3-子2：发送按钮行（发送/清空发送/添加到队列/模式/行尾/历史/定时发送/间隔，全部垂直居中）。
-    pub fn send_buttons_row(&mut self, ui: &mut egui::Ui) {
-        let s = self.t();
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            if ui
-                .add_sized([102.0, 32.0], theme::primary_widget(s.send))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.send_tip)
-                .clicked()
-            {
-                self.send_current_input();
-            }
-            if ui
-                .add_sized([102.0, 32.0], theme::secondary_widget(s.clear_send))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.clear_send_tip)
-                .clicked()
-            {
-                self.send_input.clear();
-            }
-            if ui
-                .add_sized([116.0, 32.0], theme::secondary_widget(s.add_to_queue))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(s.add_to_queue_tip)
-                .clicked()
-            {
-                self.add_current_to_queue();
-            }
-            // 模式/行尾/发送历史（设计稿未绘制，但属必需功能）
-            ui.label(egui::RichText::new(s.mode).color(theme::TEXT_SOFT));
-            widgets::combo(
-                ui,
-                64.0,
-                26.0,
-                true,
-                self.config.send_mode.label(self.config.language),
-                s.mode_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.send_mode, SendMode::Text, s.text_mode);
-                    ui.selectable_value(&mut self.config.send_mode, SendMode::Hex, "HEX");
-                },
-            );
-            ui.label(egui::RichText::new(s.line_ending).color(theme::TEXT_SOFT));
-            widgets::combo(
-                ui,
-                90.0,
-                26.0,
-                true,
-                self.config.line_ending.label(self.config.language),
-                s.line_ending_tip,
-                |ui| {
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::None, s.none);
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::CR, "CR");
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::LF, "LF");
-                    ui.selectable_value(&mut self.config.line_ending, LineEnding::CRLF, "CRLF");
-                },
-            );
-            ui.label(egui::RichText::new(s.history).color(theme::TEXT_SOFT));
-            let first = self.send_history.first().cloned().unwrap_or_default();
-            // 除历史下拉框外控件宽度固定，剩余宽度自动分配给历史下拉框（右侧预留定时发送组）
-            let hist_w = (ui.available_width() - 230.0).max(90.0);
-            widgets::combo(
-                ui,
-                hist_w,
-                26.0,
-                true,
-                if first.is_empty() { "—".to_string() } else { first.clone() },
-                s.history_tip,
-                |ui| {
-                    for h in self.send_history.clone() {
-                        if ui.button(&h).clicked() {
-                            self.send_input = h;
-                        }
-                    }
-                },
-            );
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("ms").color(theme::TEXT_SOFT));
-                let resp = ui.add_sized(
-                    [62.0, 22.0],
-                    egui::DragValue::new(&mut self.config.periodic_interval_ms)
-                        .range(10..=3_600_000),
-                );
-                resp.on_hover_text(s.interval_tip);
-                ui.label(egui::RichText::new(s.interval).color(theme::TEXT_SOFT));
-                let mut on = self.periodic_enabled;
-                if ui
-                    .add_sized([80.0, 22.0], egui::Checkbox::new(&mut on, s.periodic))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(s.periodic_tip)
-                    .changed()
-                {
-                    self.toggle_periodic(on);
-                }
-            });
-        });
-        if self.periodic_enabled {
-            ui.label(
-                egui::RichText::new(s.periodic_running)
-                    .small()
-                    .color(theme::OK_GREEN),
-            );
-        }
-    }
-
     /// 队列区：头部（队列选择/删除/复制/新建/导出/导入/清空/添加/队列发送）+ 条目列表。
     pub fn queue_panel(&mut self, ui: &mut egui::Ui) {
+        // 记录面板真实可见宽度：egui 在子控件横向溢出时会同步扩展 ui.max_rect，
+        // 若不在此锁定，头部按钮行溢出后条目列表会按被撑大的“可用宽度”排版，
+        // 导致行尾控件超出面板被裁剪。
+        let panel_w = ui.available_width();
         let s = self.t();
         // ---- 队列级操作行：固定 33px 高度容器，避免在剩余高度内垂直居中产生偏移 ----
         ui.allocate_ui_with_layout(
@@ -279,15 +161,19 @@ impl SerialApp {
             let queue = &mut self.config.queues[sel];
 
             let list_h = ui.available_height().max(40.0);
-            egui::ScrollArea::vertical()
+            // 双向滚动 + “按需显示”：通常宽度足够时内容文本框吃掉剩余宽度、
+            // 行宽与视口一致，不出现横向滚动条；当窗口窄到连“固定控件 +
+            // 最小文本框”都放不下时自动出现横向滚动条，保证右侧按钮可达。
+            egui::ScrollArea::both()
                 .id_salt("queue_items")
                 .auto_shrink([false, false])
+                .max_width(panel_w)
                 .max_height(list_h)
                 .show(ui, |ui| {
                     if queue.items.is_empty() {
                         ui.label(
                             egui::RichText::new(s.no_items_hint)
-                                .color(theme::TEXT_SOFT),
+                                .color(theme::text_soft()),
                         );
                     }
                     let spacing = ui.spacing().item_spacing.x;
@@ -296,13 +182,16 @@ impl SerialApp {
                     let send_w = 72.0;
                     let delay_w = 86.0;
                     let icon_w = 18.0;
+                    // 行内固定控件总宽（不含内容文本框）
                     let fixed = sel_w
                         + mode_w
                         + send_w
                         + delay_w
                         + icon_w * 4.0
                         + spacing * 8.0;
-                    let content_w = (ui.available_width() - fixed).max(80.0);
+                    // 内容文本框占满剩余宽度；最小 24px（egui TextEdit 内部同样有
+                    // 24px 下限）。留 1px 余量避免像素取整后行尾越界。
+                    let content_w = (ui.available_width() - fixed - 1.0).max(24.0);
 
                     for i in 0..queue.items.len() {
                         let item = &mut queue.items[i];
@@ -311,6 +200,10 @@ impl SerialApp {
                             egui::vec2(ui.available_width(), 30.0),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
+                            // 收紧本行交互控件的最小高度，与下方 24/27/22px 的分配高度一致，
+                            // 避免复选框/按钮/数值框按全局 interact_size(28) 溢出行高。
+                            ui.spacing_mut().interact_size.y = 22.0;
+                            ui.spacing_mut().button_padding.y = 1.0;
                             ui.add_sized(
                                 [sel_w, 24.0],
                                 egui::Checkbox::new(&mut item.selected, ""),
@@ -426,72 +319,6 @@ impl SerialApp {
         }
     }
 
-    fn toggle_periodic(&mut self, on: bool) {
-        if on {
-            match self.current_input_bytes() {
-                Ok(bytes) if !bytes.is_empty() => {
-                    self.session.send(Command::StartPeriodic {
-                        bytes,
-                        interval_ms: self.config.periodic_interval_ms,
-                    });
-                }
-                Ok(_) => self.set_status(self.t().empty_periodic.to_string(), true),
-                Err(e) => self.set_status(e, true),
-            }
-        } else {
-            self.session.send(Command::StopPeriodic);
-        }
-    }
-
-    fn current_input_bytes(&self) -> Result<Vec<u8>, String> {
-        match self.config.send_mode {
-            SendMode::Text => {
-                let mut b = self.send_input.as_bytes().to_vec();
-                b.extend_from_slice(self.config.line_ending.bytes());
-                Ok(b)
-            }
-            SendMode::Hex => codec::hex::parse_hex(&self.send_input, self.config.language),
-        }
-    }
-
-    fn send_current_input(&mut self) {
-        match self.current_input_bytes() {
-            Ok(bytes) if bytes.is_empty() => self.set_status(self.t().empty_send.to_string(), true),
-            Ok(bytes) => {
-                let n = bytes.len();
-                self.session.send(Command::Write(bytes));
-                let content = self.send_input.trim().to_string();
-                if !content.is_empty() {
-                    self.send_history.retain(|h| h != &content);
-                    self.send_history.insert(0, content);
-                    self.send_history.truncate(20);
-                }
-                self.set_status(
-                    self.t()
-                        .fill(self.t().sent_bytes_fmt, &[("n", n.to_string())]),
-                    false,
-                );
-            }
-            Err(e) => self.set_status(e, true),
-        }
-    }
-
-    pub(crate) fn start_file_send(&mut self) {
-        let Some(path) = self.pending_file.clone() else {
-            self.set_status(self.t().choose_file_first.to_string(), true);
-            return;
-        };
-        let mode = self.config.file_mode;
-        let line_ending = self.config.line_ending.bytes().to_vec();
-        let interval = self.config.file_line_interval_ms;
-        self.session.send(Command::StartFile {
-            path,
-            mode,
-            line_ending,
-            line_interval_ms: interval,
-        });
-    }
-
     /// 队列发送：忽略未勾选与空条目；全部不可发送时弹窗警告。
     fn start_queue_send(&mut self) {
         let Some(queue) = self.config.queues.get(self.config.selected_queue).cloned() else {
@@ -552,7 +379,7 @@ impl SerialApp {
         });
     }
 
-    fn add_current_to_queue(&mut self) {
+    pub(crate) fn add_current_to_queue(&mut self) {
         let content = self.send_input.clone();
         if content.trim().is_empty() {
             self.set_status(self.t().empty_send.to_string(), true);
@@ -726,7 +553,7 @@ fn icon_button(
         let color = if resp.hovered() {
             theme::BLUE
         } else {
-            theme::TEXT_SOFT
+            theme::text_soft()
         };
         draw(ui.painter(), rect, color);
     }

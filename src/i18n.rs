@@ -54,8 +54,8 @@ pub struct Strings {
     pub status_not_connected: &'static str,
     pub status_periodic: &'static str,
 
-    // 串口配置行
-    pub port: &'static str,
+    // 配置行
+    pub port_config: &'static str,
     pub port_placeholder: &'static str,
     pub port_tip: &'static str,
     pub baud_rate: &'static str,
@@ -77,6 +77,11 @@ pub struct Strings {
     pub open_close_tip: &'static str,
     pub language: &'static str,
     pub language_tip: &'static str,
+    pub theme: &'static str,
+    pub theme_system: &'static str,
+    pub theme_dark: &'static str,
+    pub theme_light: &'static str,
+    pub theme_tip: &'static str,
 
     // 接收设置行
     pub display: &'static str,
@@ -90,8 +95,6 @@ pub struct Strings {
     pub pause_receive_tip: &'static str,
     pub auto_refresh: &'static str,
     pub auto_refresh_tip: &'static str,
-    pub show_sent: &'static str,
-    pub show_sent_tip: &'static str,
     pub record_log: &'static str,
     pub record_log_tip: &'static str,
     pub log_filter: &'static str,
@@ -102,6 +105,8 @@ pub struct Strings {
     pub clear_stats_tip: &'static str,
     pub clear_display: &'static str,
     pub clear_display_tip: &'static str,
+    pub show_timestamps: &'static str,
+    pub show_timestamps_tip: &'static str,
 
     // 文件发送行
     pub send_file: &'static str,
@@ -119,6 +124,7 @@ pub struct Strings {
 
     // 发送区
     pub send: &'static str,
+    pub send_area: &'static str,
     pub send_tip: &'static str,
     pub send_input_hint: &'static str,
     pub clear_send: &'static str,
@@ -140,6 +146,7 @@ pub struct Strings {
 
     // 队列区
     pub queue: &'static str,
+    pub queue_area: &'static str,
     pub queue_tip: &'static str,
     pub delete: &'static str,
     pub delete_queue_tip: &'static str,
@@ -179,9 +186,15 @@ pub struct Strings {
     pub receive_area: &'static str,
     pub receive_empty: &'static str,
     pub display_dropped: &'static str,
-    pub not_showing_sent: &'static str,
     pub select_all: &'static str,
     pub paste: &'static str,
+    pub terminal_mode: &'static str,
+    pub terminal_mode_tip: &'static str,
+    pub auto_echo: &'static str,
+    pub auto_echo_tip: &'static str,
+    pub enter_sends: &'static str,
+    pub enter_sends_tip: &'static str,
+    pub terminal_empty: &'static str,
 
     // 状态 / 提示消息
     pub status_connected_fmt: &'static str,
@@ -232,6 +245,7 @@ pub struct Strings {
     pub hex_missing_digits_fmt: &'static str,
     pub hex_odd_length_fmt: &'static str,
     pub hex_invalid_char_fmt: &'static str,
+    pub panels_hidden: &'static str,
 }
 
 impl Strings {
@@ -255,7 +269,6 @@ pub const ZH: Strings = Strings {
     status_not_connected: "未连接",
     status_periodic: "周期发送中",
 
-    port: "端口",
     port_placeholder: "请选择",
     port_tip: "选择要连接的串口",
     baud_rate: "波特率",
@@ -275,8 +288,14 @@ pub const ZH: Strings = Strings {
     open_port: "打开串口",
     close_port: "关闭串口",
     open_close_tip: "打开/关闭当前配置的串口",
+    port_config: "配置",
     language: "语言",
     language_tip: "选择界面语言",
+    theme: "主题",
+    theme_system: "跟随系统",
+    theme_dark: "深色",
+    theme_light: "亮色",
+    theme_tip: "切换界面主题（深色/亮色）",
 
     display: "显示",
     display_tip: "接收数据的显示格式（文本/HEX）",
@@ -287,10 +306,8 @@ pub const ZH: Strings = Strings {
     auto_scroll_tip: "数据自动滚动到底部",
     pause_receive: "暂停接收",
     pause_receive_tip: "暂停刷新展示区，统计与日志照常记录",
-    auto_refresh: "自动刷新",
+    auto_refresh: "自动刷新端口",
     auto_refresh_tip: "每 5 秒自动检测串口列表",
-    show_sent: "显示发送",
-    show_sent_tip: "在接收区显示发送的数据（带 [TX] 标记）",
     record_log: "记录日志",
     record_log_tip: "勾选后自动选择日志文件路径并开始记录",
     log_filter: "日志",
@@ -301,6 +318,8 @@ pub const ZH: Strings = Strings {
     clear_stats_tip: "RX/TX 字节计数归零",
     clear_display: "清空显示",
     clear_display_tip: "清空数据展示区",
+    show_timestamps: "显示时间戳",
+    show_timestamps_tip: "在接收区显示每条数据的接收/发送时间",
 
     send_file: "发送文件",
     send_file_tip: "按当前模式发送所选文件",
@@ -316,6 +335,7 @@ pub const ZH: Strings = Strings {
     progress_bytes: "{sent}/{total} 字节",
 
     send: "发送",
+    send_area: "发送区",
     send_tip: "以当前模式发送输入框内容",
     send_input_hint: "请输入内容…",
     clear_send: "清空发送",
@@ -336,6 +356,7 @@ pub const ZH: Strings = Strings {
     periodic_running: "● 定时发送运行中",
 
     queue: "队列",
+    queue_area: "队列发送",
     queue_tip: "选择当前编辑/发送的队列",
     delete: "删除",
     delete_queue_tip: "删除当前队列",
@@ -374,9 +395,15 @@ pub const ZH: Strings = Strings {
     receive_area: "接收区",
     receive_empty: "暂无数据…",
     display_dropped: "（显示缓冲已满，丢弃 {n} 字节）",
-    not_showing_sent: "（未显示发送数据）",
     select_all: "全选",
     paste: "粘贴",
+    terminal_mode: "终端模式",
+    terminal_mode_tip: "终端模式：深色背景、无时间戳、支持 ANSI 颜色，接收区可直接键盘输入",
+    auto_echo: "本地回显",
+    auto_echo_tip: "对端无回显时，在展示区显示发送的数据、终端模式回显键盘输入",
+    enter_sends: "回车发送",
+    enter_sends_tip: "仅按回车键时发送整行（回车字符一并发送）；关闭后按键即发（需启用终端模式）",
+    terminal_empty: "等待数据…",
 
     status_connected_fmt: "已连接 {port}",
     status_disconnected: "已断开",
@@ -425,6 +452,7 @@ pub const ZH: Strings = Strings {
     hex_missing_digits_fmt: "{tok}: 缺少十六进制数字",
     hex_odd_length_fmt: "{tok}: 奇数个十六进制字符",
     hex_invalid_char_fmt: "{tok}: 包含非法十六进制字符",
+    panels_hidden: "所有面板均已收起，点击按钮恢复：",
 };
 
 /// 英文文案。
@@ -437,7 +465,6 @@ pub const EN: Strings = Strings {
     status_not_connected: "Not connected",
     status_periodic: "Periodic sending",
 
-    port: "Port",
     port_placeholder: "Select",
     port_tip: "Select the serial port to connect",
     baud_rate: "Baud rate",
@@ -457,8 +484,14 @@ pub const EN: Strings = Strings {
     open_port: "Open Port",
     close_port: "Close Port",
     open_close_tip: "Open/close the configured serial port",
+    port_config: "Config",
     language: "Language",
     language_tip: "Choose the UI language",
+    theme: "Theme",
+    theme_system: "System",
+    theme_dark: "Dark",
+    theme_light: "Light",
+    theme_tip: "Switch UI theme (dark/light)",
 
     display: "Display",
     display_tip: "Receive display format (text/HEX)",
@@ -469,10 +502,8 @@ pub const EN: Strings = Strings {
     auto_scroll_tip: "Auto-scroll data to the bottom",
     pause_receive: "Pause",
     pause_receive_tip: "Pause display updates; stats and logging continue",
-    auto_refresh: "Auto refresh",
+    auto_refresh: "Auto refresh port",
     auto_refresh_tip: "Detect serial ports every 5 seconds",
-    show_sent: "Show sent",
-    show_sent_tip: "Show sent data in the receive area (marked [TX])",
     record_log: "Record log",
     record_log_tip: "Choose a log file path and start recording",
     log_filter: "Log",
@@ -483,6 +514,8 @@ pub const EN: Strings = Strings {
     clear_stats_tip: "Reset RX/TX byte counters",
     clear_display: "Clear Display",
     clear_display_tip: "Clear the data display area",
+    show_timestamps: "Show Timestamps",
+    show_timestamps_tip: "Show the receive/send time of each data segment",
 
     send_file: "Send File",
     send_file_tip: "Send the selected file with the current mode",
@@ -498,6 +531,7 @@ pub const EN: Strings = Strings {
     progress_bytes: "{sent}/{total} bytes",
 
     send: "Send",
+    send_area: "Send Area",
     send_tip: "Send the input box content with the current mode",
     send_input_hint: "Enter content…",
     clear_send: "Clear",
@@ -518,6 +552,7 @@ pub const EN: Strings = Strings {
     periodic_running: "● Periodic sending",
 
     queue: "Queue",
+    queue_area: "Queue Send",
     queue_tip: "Choose the queue to edit/send",
     delete: "Delete",
     delete_queue_tip: "Delete the current queue",
@@ -556,9 +591,15 @@ pub const EN: Strings = Strings {
     receive_area: "Receive",
     receive_empty: "No data…",
     display_dropped: "(Display buffer full, {n} bytes dropped)",
-    not_showing_sent: "(Sent data not shown)",
     select_all: "Select All",
     paste: "Paste",
+    terminal_mode: "Terminal",
+    terminal_mode_tip: "Terminal mode: dark background, no timestamps, ANSI colors, keyboard input",
+    auto_echo: "Local echo",
+    auto_echo_tip: "Show sent data locally when the peer does not echo (echo typed input in terminal mode)",
+    enter_sends: "Enter sends",
+    enter_sends_tip: "Send the line only on Enter (including the Enter character); off = send as you type (requires terminal mode)",
+    terminal_empty: "Waiting for data…",
 
     status_connected_fmt: "Connected {port}",
     status_disconnected: "Disconnected",
@@ -607,6 +648,7 @@ pub const EN: Strings = Strings {
     hex_missing_digits_fmt: "{tok}: missing hex digits",
     hex_odd_length_fmt: "{tok}: odd number of hex characters",
     hex_invalid_char_fmt: "{tok}: contains invalid hex characters",
+    panels_hidden: "All panels are hidden. Click a button to restore:",
 };
 
 #[cfg(test)]

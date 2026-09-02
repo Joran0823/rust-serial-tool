@@ -1,101 +1,297 @@
-//! 设计稿（docs/UI-Desing.svg）对应的浅色主题与常用控件配色。
+﻿//! 主题感知颜色：深色/亮色支持，通过 getter 函数返回当前主题色。
+//! 常量保留历史值（深色）以便兼容；新代码使用 getter 函数。
 
 use eframe::egui;
+use std::cell::Cell;
 
-/// 窗口/侧栏背景（画板底色）
-pub const BG: egui::Color32 = egui::Color32::from_rgb(0xCC, 0xCC, 0xCC);
-/// 面板底色（左栏分区、右侧三栏）
-pub const PANEL: egui::Color32 = egui::Color32::from_rgb(0xE0, 0xE0, 0xE0);
-/// 状态栏底色
-pub const STATUS_BG: egui::Color32 = egui::Color32::from_rgb(0xD6, 0xD6, 0xD6);
-/// 次要按钮底色
-pub const BTN_GRAY: egui::Color32 = egui::Color32::from_rgb(0xE7, 0xE7, 0xE7);
-/// 主按钮 / 强调色
-pub const BLUE: egui::Color32 = egui::Color32::from_rgb(0x2A, 0x82, 0xE4);
-/// 勾选 / 选中蓝
-pub const BLUE_CHECK: egui::Color32 = egui::Color32::from_rgb(0x18, 0x90, 0xFF);
-/// 普通正文
-pub const TEXT: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
-/// 弱化文字（占位、说明）
-pub const TEXT_SOFT: egui::Color32 = egui::Color32::from_rgb(0x7A, 0x7A, 0x7A);
-/// 控件边框（rgba(0,0,0,0.15)）
-pub const BORDER: egui::Stroke = egui::Stroke {
-    width: 1.0,
-    color: egui::Color32::from_black_alpha(38),
-};
-/// 错误红
-pub const ERROR_RED: egui::Color32 = egui::Color32::from_rgb(0xDC, 0x3C, 0x3C);
-/// 成功绿
-pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0x3C, 0xA0, 0x3C);
+// ---- 深色主题色 ----
+const BG_D: egui::Color32 = egui::Color32::from_rgb(0x13, 0x17, 0x1D);
+const PANEL_D: egui::Color32 = egui::Color32::from_rgb(0x1B, 0x20, 0x28);
+const STATUS_BG_D: egui::Color32 = egui::Color32::from_rgb(0x16, 0x1A, 0x21);
+const INPUT_BG_D: egui::Color32 = egui::Color32::from_rgb(0x10, 0x14, 0x1A);
+const BTN_GRAY_D: egui::Color32 = egui::Color32::from_rgb(0x25, 0x2B, 0x35);
+const TEXT_D: egui::Color32 = egui::Color32::from_rgb(0xE5, 0xE8, 0xEC);
+const TEXT_SOFT_D: egui::Color32 = egui::Color32::from_rgb(0x99, 0xA1, 0xAD);
+const BORDER_COLOR_D: egui::Color32 = egui::Color32::from_rgb(0x3A, 0x41, 0x4B);
 
-/// 应用到全局样式。
-pub fn apply(ctx: &egui::Context) {
-    let mut v = egui::Visuals::light();
-    v.panel_fill = PANEL;
-    v.window_fill = egui::Color32::from_rgb(0xF5, 0xF5, 0xF5);
-    v.extreme_bg_color = BG;
-    v.override_text_color = Some(TEXT);
-    v.selection.bg_fill = BLUE_CHECK;
-    // egui 渲染选中文字时用 selection.stroke.color 着色、selection.bg_fill 画高亮底，
-    // 两者不能相同（此前均为蓝色导致选中文字不可见）。
-    v.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    v.hyperlink_color = BLUE;
+// ---- 亮色主题色 ----
+const BG_L: egui::Color32 = egui::Color32::from_rgb(0xF2, 0xF3, 0xF5);
+const PANEL_L: egui::Color32 = egui::Color32::from_rgb(0xE9, 0xEB, 0xEF);
+const STATUS_BG_L: egui::Color32 = egui::Color32::from_rgb(0xE2, 0xE4, 0xE9);
+const INPUT_BG_L: egui::Color32 = egui::Color32::from_rgb(0xFF, 0xFF, 0xFF);
+const BTN_GRAY_L: egui::Color32 = egui::Color32::from_rgb(0xE2, 0xE4, 0xE9);
+const TEXT_L: egui::Color32 = egui::Color32::from_rgb(0x1F, 0x24, 0x2B);
+const TEXT_SOFT_L: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x73, 0x80);
+const BORDER_COLOR_L: egui::Color32 = egui::Color32::from_rgb(0xC2, 0xC8, 0xD1);
 
-    v.widgets.noninteractive.bg_fill = egui::Color32::WHITE;
-    v.widgets.noninteractive.weak_bg_fill = PANEL;
-    v.widgets.noninteractive.bg_stroke = BORDER;
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, TEXT);
+// ---- 主题无关色 ----
+pub const BLUE: egui::Color32 = egui::Color32::from_rgb(0x45, 0x96, 0xFF);
+pub const BLUE_CHECK: egui::Color32 = egui::Color32::from_rgb(0x2E, 0x7C, 0xF6);
+pub const ERROR_RED: egui::Color32 = egui::Color32::from_rgb(0xF0, 0x6A, 0x6A);
+pub const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(0x4C, 0xC3, 0x6A);
+pub const TERMINAL_BG: egui::Color32 = egui::Color32::from_rgb(0x0F, 0x12, 0x16);
+pub const TERMINAL_TEXT: egui::Color32 = egui::Color32::from_rgb(0xD4, 0xD4, 0xD4);
+pub const TERMINAL_PROMPT: egui::Color32 = egui::Color32::from_rgb(0x2F, 0xD4, 0x8C);
+pub const CORNER: u8 = 6;
 
-    v.widgets.inactive.bg_fill = egui::Color32::WHITE;
-    // 下拉框/输入类控件底色（设计稿为白色）
-    v.widgets.inactive.weak_bg_fill = egui::Color32::WHITE;
-    v.widgets.inactive.bg_stroke = BORDER;
-    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, TEXT);
-
-    v.widgets.hovered.bg_fill = egui::Color32::WHITE;
-    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(0xF6, 0xF6, 0xF6);
-    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, BLUE_CHECK);
-    v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, TEXT);
-
-    v.widgets.active.bg_fill = egui::Color32::from_rgb(0xDD, 0xEA, 0xF8);
-    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(0xDD, 0xEA, 0xF8);
-    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, BLUE);
-    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, TEXT);
-
-    v.widgets.open.bg_fill = egui::Color32::WHITE;
-    v.widgets.open.weak_bg_fill = egui::Color32::WHITE;
-    v.widgets.open.bg_stroke = BORDER;
-    v.widgets.open.fg_stroke = egui::Stroke::new(1.0, TEXT);
-
-    // 应用默认主题可能是 Dark，这里强制 Light 并同时写入两套样式，
-    // 保证下拉框等控件使用浅色主题。
-    ctx.set_theme(egui::Theme::Light);
-    ctx.set_visuals_of(egui::Theme::Light, v.clone());
-    ctx.set_visuals_of(egui::Theme::Dark, v);
+// ---- 主题状态 ----
+// 用线程局部变量而非全局原子量：egui UI 只在单线程渲染，而并行测试各自在
+// 独立线程中设置/渲染主题，全局状态会让“亮色主题”测试读到别线程写入的深色值。
+thread_local! {
+    static IS_DARK: Cell<bool> = const { Cell::new(true) };
 }
 
-/// 主按钮控件（配合 `ui.add_sized` 使用）。
+pub fn is_dark() -> bool {
+    IS_DARK.with(|dark| dark.get())
+}
+
+/// 仅模块内部（及同模块测试）写入当前线程的主题状态。
+fn set_dark(is_dark: bool) {
+    IS_DARK.with(|dark| dark.set(is_dark));
+}
+
+// ---- 主题感知 getter ----
+#[allow(dead_code)]
+pub fn bg() -> egui::Color32 {
+    if is_dark() { BG_D } else { BG_L }
+}
+pub fn panel() -> egui::Color32 {
+    if is_dark() { PANEL_D } else { PANEL_L }
+}
+pub fn status_bg() -> egui::Color32 {
+    if is_dark() { STATUS_BG_D } else { STATUS_BG_L }
+}
+pub fn input_bg() -> egui::Color32 {
+    if is_dark() { INPUT_BG_D } else { INPUT_BG_L }
+}
+/// 禁用状态下输入类控件（如下拉框）的背景：深浅主题分别取合适的灰阶，
+/// 不能直接复用深色值，否则亮色主题下会变成黑色块。
+pub fn input_bg_disabled() -> egui::Color32 {
+    if is_dark() {
+        egui::Color32::from_rgb(0x18, 0x1D, 0x24)
+    } else {
+        egui::Color32::from_rgb(0xE9, 0xEB, 0xEF)
+    }
+}
+pub fn btn_gray() -> egui::Color32 {
+    if is_dark() { BTN_GRAY_D } else { BTN_GRAY_L }
+}
+pub fn text() -> egui::Color32 {
+    if is_dark() { TEXT_D } else { TEXT_L }
+}
+pub fn text_soft() -> egui::Color32 {
+    if is_dark() { TEXT_SOFT_D } else { TEXT_SOFT_L }
+}
+pub fn border() -> egui::Stroke {
+    egui::Stroke::new(1.0, if is_dark() { BORDER_COLOR_D } else { BORDER_COLOR_L })
+}
+
+// ---- 兼容常量（始终为深色值，旧代码引用仍可编译） ----
+#[allow(dead_code)]
+pub const BG: egui::Color32 = BG_D;
+#[allow(dead_code)]
+pub const PANEL: egui::Color32 = PANEL_D;
+#[allow(dead_code)]
+pub const STATUS_BG: egui::Color32 = STATUS_BG_D;
+#[allow(dead_code)]
+pub const INPUT_BG: egui::Color32 = INPUT_BG_D;
+#[allow(dead_code)]
+pub const BTN_GRAY: egui::Color32 = BTN_GRAY_D;
+#[allow(dead_code)]
+pub const TEXT: egui::Color32 = TEXT_D;
+#[allow(dead_code)]
+pub const TEXT_SOFT: egui::Color32 = TEXT_SOFT_D;
+#[allow(dead_code)]
+pub const BORDER: egui::Stroke = egui::Stroke { width: 1.0, color: BORDER_COLOR_D };
+// ---- 主题应用 ----
+/// 应用主题（沿用旧 API，默认深色）。
+#[allow(dead_code)]
+pub fn apply(ctx: &egui::Context) {
+    apply_theme(ctx, true);
+}
+
+/// 根据系统主题设置应用：None 表示跟随系统。
+pub fn apply_theme(ctx: &egui::Context, is_dark: bool) {
+    set_dark(is_dark);
+    let (dark_vis, light_vis) = (dark_visuals(), light_visuals());
+    ctx.set_style_of(egui::Theme::Dark, base_style(dark_vis.clone()));
+    ctx.set_style_of(egui::Theme::Light, base_style(light_vis.clone()));
+    ctx.set_visuals_of(egui::Theme::Dark, dark_vis);
+    ctx.set_visuals_of(egui::Theme::Light, light_vis);
+    ctx.set_theme(if is_dark { egui::Theme::Dark } else { egui::Theme::Light });
+}
+
+fn base_style(visuals: egui::Visuals) -> egui::Style {
+    let mut style = egui::Style {
+        visuals,
+        ..Default::default()
+    };
+    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.button_padding = egui::vec2(14.0, 4.0);
+    style.spacing.interact_size = egui::vec2(48.0, 28.0);
+    style.spacing.window_margin = egui::Margin::same(8);
+    style.spacing.menu_margin = egui::Margin::same(6);
+    style.spacing.icon_width = 18.0;
+    style.spacing.icon_width_inner = 6.0;
+    style.spacing.icon_spacing = 8.0;
+    style.spacing.scroll = egui::style::ScrollStyle::floating();
+    style.spacing.scroll.bar_width = 8.0;
+    style.spacing.scroll.floating_width = 3.0;
+    style.spacing.scroll.content_margin = egui::Margin::same(4);
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, egui::FontId::proportional(17.0));
+    style
+}
+
+fn dark_visuals() -> egui::Visuals {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = PANEL_D;
+    v.window_fill = BG_D;
+    v.extreme_bg_color = BG_D;
+    v.faint_bg_color = INPUT_BG_D;
+    v.code_bg_color = INPUT_BG_D;
+    v.override_text_color = Some(TEXT_D);
+    v.hyperlink_color = BLUE;
+    v.warn_fg_color = egui::Color32::from_rgb(0xE3, 0xA5, 0x3C);
+    v.error_fg_color = ERROR_RED;
+    v.selection.bg_fill = BLUE_CHECK.linear_multiply(0.40);
+    v.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    v.window_corner_radius = egui::CornerRadius::same(10);
+    v.menu_corner_radius = egui::CornerRadius::same(8);
+    v.window_shadow = egui::epaint::Shadow {
+        offset: [0, 6],
+        blur: 24,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(120),
+    };
+    v.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 16,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(120),
+    };
+    widget_visuals(&mut v, false);
+    v
+}
+
+fn light_visuals() -> egui::Visuals {
+    let mut v = egui::Visuals::light();
+    v.panel_fill = PANEL_L;
+    v.window_fill = BG_L;
+    v.extreme_bg_color = BG_L;
+    v.faint_bg_color = INPUT_BG_L;
+    v.code_bg_color = INPUT_BG_L;
+    v.override_text_color = Some(TEXT_L);
+    v.hyperlink_color = BLUE;
+    v.warn_fg_color = egui::Color32::from_rgb(0xB8, 0x84, 0x0E);
+    v.error_fg_color = ERROR_RED;
+    v.selection.bg_fill = BLUE_CHECK.linear_multiply(0.25);
+    v.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    v.window_corner_radius = egui::CornerRadius::same(10);
+    v.menu_corner_radius = egui::CornerRadius::same(8);
+    v.window_shadow = egui::epaint::Shadow {
+        offset: [0, 6],
+        blur: 24,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(25),
+    };
+    v.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 16,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(25),
+    };
+    widget_visuals(&mut v, true);
+    v
+}
+
+fn widget_visuals(v: &mut egui::Visuals, light: bool) {
+    let (border_color, inactive_bg, hovered_bg, active_bg, open_bg, text_color, input_bg, panel_bg) =
+        if light {
+            (
+                BORDER_COLOR_L,
+                egui::Color32::from_rgb(0xF7, 0xF8, 0xFA),
+                egui::Color32::from_rgb(0xEE, 0xF0, 0xF4),
+                egui::Color32::from_rgb(0xDA, 0xE9, 0xFA),
+                egui::Color32::from_rgb(0xF7, 0xF8, 0xFA),
+                TEXT_L,
+                INPUT_BG_L,
+                PANEL_L,
+            )
+        } else {
+            (
+                BORDER_COLOR_D,
+                egui::Color32::from_rgb(0x22, 0x28, 0x32),
+                egui::Color32::from_rgb(0x2A, 0x31, 0x3D),
+                egui::Color32::from_rgb(0x20, 0x3B, 0x5E),
+                egui::Color32::from_rgb(0x22, 0x28, 0x32),
+                TEXT_D,
+                INPUT_BG_D,
+                PANEL_D,
+            )
+        };
+    let border = egui::Stroke::new(1.0, border_color);
+    let border_hover = egui::Stroke::new(1.0, BLUE_CHECK);
+    let text_stroke = egui::Stroke::new(1.0, text_color);
+    let radius = egui::CornerRadius::same(CORNER);
+    v.widgets.noninteractive.bg_fill = input_bg;
+    v.widgets.noninteractive.weak_bg_fill = panel_bg;
+    v.widgets.noninteractive.bg_stroke =
+        egui::Stroke::new(1.0, if light { egui::Color32::from_rgb(0xD0, 0xD5, 0xDD) } else { egui::Color32::from_white_alpha(10) });
+    v.widgets.noninteractive.fg_stroke = text_stroke;
+    v.widgets.noninteractive.corner_radius = radius;
+    v.widgets.inactive.bg_fill = inactive_bg;
+    v.widgets.inactive.weak_bg_fill = inactive_bg;
+    v.widgets.inactive.bg_stroke = border;
+    v.widgets.inactive.fg_stroke = text_stroke;
+    v.widgets.inactive.corner_radius = radius;
+    v.widgets.hovered.bg_fill = hovered_bg;
+    v.widgets.hovered.weak_bg_fill = hovered_bg;
+    v.widgets.hovered.bg_stroke = border_hover;
+    v.widgets.hovered.fg_stroke = text_stroke;
+    v.widgets.hovered.corner_radius = radius;
+    v.widgets.active.bg_fill = active_bg;
+    v.widgets.active.weak_bg_fill = active_bg;
+    v.widgets.active.bg_stroke = border_hover;
+    v.widgets.active.fg_stroke = text_stroke;
+    v.widgets.active.corner_radius = radius;
+    v.widgets.open.bg_fill = open_bg;
+    v.widgets.open.weak_bg_fill = open_bg;
+    v.widgets.open.bg_stroke = border;
+    v.widgets.open.fg_stroke = text_stroke;
+    v.widgets.open.corner_radius = radius;
+}
+
+// ---- 控件构建器（主题感知） ----
 pub fn primary_widget(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE).strong())
         .fill(BLUE)
         .stroke(egui::Stroke::new(0.0, BLUE))
-        .corner_radius(4)
+        .corner_radius(egui::CornerRadius::same(CORNER))
 }
 
-/// 次要按钮控件（配合 `ui.add_sized` 使用）。
-pub fn secondary_widget(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).color(TEXT))
-        .fill(BTN_GRAY)
-        .stroke(BORDER)
-        .corner_radius(4)
+pub fn secondary_widget(label: &str) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(label).color(text()))
+        .fill(btn_gray())
+        .stroke(border())
+        .corner_radius(egui::CornerRadius::same(CORNER))
 }
 
-/// 白底蓝描边按钮控件（配合 `ui.add_sized` 使用）。
 pub fn outline_widget(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).color(BLUE))
-        .fill(egui::Color32::WHITE)
+        .fill(panel())
         .stroke(egui::Stroke::new(1.0, BLUE))
-        .corner_radius(4)
+        .corner_radius(egui::CornerRadius::same(CORNER))
 }
 
 #[cfg(test)]
@@ -104,8 +300,6 @@ mod tests {
 
     #[test]
     fn selection_text_color_differs_from_highlight() {
-        // egui 用 selection.stroke.color 给选中文字着色、selection.bg_fill 画高亮底；
-        // 两者相同会导致选中文字不可见（此前 bug：均为 BLUE_CHECK）。
         let ctx = egui::Context::default();
         apply(&ctx);
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
@@ -116,5 +310,18 @@ mod tests {
                 "选中文字颜色不能与高亮底色相同（theme={theme:?}）"
             );
         }
+    }
+
+    #[test]
+    fn theme_getters_return_valid_colors() {
+        for dark in [true, false] {
+            set_dark(dark);
+            assert_ne!(bg(), egui::Color32::TRANSPARENT);
+            assert_ne!(panel(), egui::Color32::TRANSPARENT);
+            assert_ne!(text(), egui::Color32::TRANSPARENT);
+            assert_ne!(text_soft(), egui::Color32::TRANSPARENT);
+            assert_ne!(input_bg(), egui::Color32::TRANSPARENT);
+        }
+        set_dark(true);
     }
 }

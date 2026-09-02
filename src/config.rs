@@ -303,18 +303,45 @@ impl SendQueue {
     }
 }
 
+
+/// 界面主题设置：跟随系统 / 深色 / 亮色。
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ThemeSetting {
+    /// 跟随系统主题（启动时按系统深浅色）
+    #[default]
+    System,
+    /// 始终深色
+    Dark,
+    /// 始终亮色
+    Light,
+}
+
+impl ThemeSetting {
+    /// 当前是否应使用深色（System 时按系统）。
+    pub fn is_dark(&self, system_dark: bool) -> bool {
+        match self {
+            Self::System => system_dark,
+            Self::Dark => true,
+            Self::Light => false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub port: PortSettings,
     /// 界面语言（缺省时按系统语言决定）
     #[serde(default = "default_language")]
     pub language: Language,
+    /// 界面主题（缺省跟随系统）
+    #[serde(default)]
+    pub theme: ThemeSetting,
     pub display_mode: DisplayMode,
     pub text_encoding: TextEncoding,
     pub autoscroll: bool,
-    /// 是否在数据展示区显示发送的数据
+    /// 是否在数据展示区显示时间戳（默认勾选）
     #[serde(default = "default_true")]
-    pub show_sent_data: bool,
+    pub show_timestamps: bool,
     pub send_mode: SendMode,
     pub line_ending: LineEnding,
     pub periodic_interval_ms: u32,
@@ -324,6 +351,16 @@ pub struct Config {
     pub selected_queue: usize,
     pub max_queue_items: usize,
     pub auto_refresh_ports: bool,
+    /// 接收区终端模式：深色背景、无时间戳、支持 ANSI 颜色，接收区可直接键盘输入
+    #[serde(default = "default_false")]
+    pub terminal_mode: bool,
+    /// 本地回显：非终端模式下在展示区显示发送的数据（[TX] 标记），
+    /// 终端模式下回显键盘输入内容（对端无回显时使用）；默认勾选
+    #[serde(default = "default_true")]
+    pub terminal_auto_echo: bool,
+    /// 终端模式：仅按回车时发送整行（回车字符一并发送）；关闭后按键即发
+    #[serde(default = "default_true")]
+    pub terminal_enter_sends: bool,
 }
 
 impl Default for Config {
@@ -332,10 +369,11 @@ impl Default for Config {
         Self {
             port: PortSettings::default(),
             language,
+            theme: ThemeSetting::System,
             display_mode: DisplayMode::Text,
             text_encoding: TextEncoding::Utf8,
             autoscroll: true,
-            show_sent_data: true,
+            show_timestamps: true,
             send_mode: SendMode::Text,
             line_ending: LineEnding::None,
             periodic_interval_ms: 1000,
@@ -345,12 +383,19 @@ impl Default for Config {
             selected_queue: 0,
             max_queue_items: 200,
             auto_refresh_ports: true,
+            terminal_mode: false,
+            terminal_auto_echo: true,
+            terminal_enter_sends: true,
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_language() -> Language {
@@ -446,6 +491,44 @@ mod tests {
     fn default_line_ending_is_none() {
         assert_eq!(Config::default().line_ending, LineEnding::None);
         assert_eq!(LineEnding::default(), LineEnding::None);
+    }
+
+    #[test]
+    fn terminal_defaults_and_old_config_compat() {
+        let c = Config::default();
+        assert!(!c.terminal_mode, "终端模式默认关闭");
+        assert!(c.terminal_auto_echo, "自动回显默认勾选");
+        assert!(c.terminal_enter_sends, "回车发送默认开启");
+
+        // 旧版本配置文件没有终端字段，应能正常反序列化并取默认值
+        let old = toml::from_str::<Config>(
+            r#"
+display_mode = "Text"
+text_encoding = "Utf8"
+autoscroll = true
+send_mode = "Text"
+line_ending = "None"
+periodic_interval_ms = 1000
+file_mode = "WholeFile"
+file_line_interval_ms = 100
+queues = []
+selected_queue = 0
+max_queue_items = 200
+auto_refresh_ports = true
+
+[port]
+port_name = "COM3"
+baud_rate = 9600
+data_bits = "Eight"
+stop_bits = "One"
+parity = "None"
+flow_control = "None"
+"#,
+        )
+        .expect("旧版配置应能反序列化");
+        assert!(!old.terminal_mode);
+        assert!(old.terminal_auto_echo);
+        assert!(old.terminal_enter_sends);
     }
 
     #[test]
