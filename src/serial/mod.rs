@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 串口会话层：封装 serialport，提供命令/事件通道。
 
 pub mod session;

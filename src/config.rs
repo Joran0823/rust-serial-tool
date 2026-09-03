@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 应用配置：端口参数、UI 偏好、发送队列等，序列化为 TOML 持久化。
 
 use crate::i18n::Language;

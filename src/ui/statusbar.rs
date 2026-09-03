@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 底部状态栏：状态信息、连接状态、收发统计。
 
 use crate::app::SerialApp;

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 发送队列的文件保存 / 导入。
 //!
 //! 主格式采用 TOML（与配置文件一致，可读、类型化、天然支持数组结构）；

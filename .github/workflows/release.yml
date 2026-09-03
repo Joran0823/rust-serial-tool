@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Joran
+
 name: Release
 
 # 推送 v* / V* 格式的 tag（如 v1.2.3、V1.2.3）后：

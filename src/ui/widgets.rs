@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 通用控件：统一样式下拉框（“整块发送”样式）、悬停光标等。
 
 use crate::ui::theme;

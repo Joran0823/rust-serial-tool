@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 /// 版本号来源：
 /// 1. 环境变量 `SERIAL_TOOL_VERSION`（由 release workflow 在打 tag 时注入，如 `v1.2.3`）；
-/// 2. 回退到 `Cargo.toml` 的 package.version（本地构建，默认 1.0.0）。
+/// 2. 回退到 `Cargo.toml` 的 package.version（本地构建，当前 2.0.1）。
 fn app_version() -> String {
     env::var("SERIAL_TOOL_VERSION")
         .ok()
@@ -85,6 +88,7 @@ fn main() {
                          VALUE \"CompanyName\", \"serial-tool\"\n\
                          VALUE \"FileDescription\", \"串口调试助手\"\n\
                          VALUE \"FileVersion\", \"{display}\"\n\
+                         VALUE \"LegalCopyright\", \"Copyright (c) 2026 Joran\"\n\
                          VALUE \"InternalName\", \"serial-tool\"\n\
                          VALUE \"OriginalFilename\", \"serial-tool.exe\"\n\
                          VALUE \"ProductName\", \"串口调试助手\"\n\

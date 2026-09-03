@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 串口会话：一个写线程负责所有写操作与长任务调度，
 //! 每次打开串口额外启动一个读线程（通过 try_clone 共享句柄）。
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 顶部配置区：配置（横向分布、填满窗口，含打开/关闭串口、语言、主题）。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版，800×700 单栏布局）。
 

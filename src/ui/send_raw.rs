@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 发送原始数据面板：发送文本框、按钮行（发送/清空/模式/行尾/历史/定时发送）。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的发送区。
 

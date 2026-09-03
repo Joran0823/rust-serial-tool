@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 文本编码转换。
 
 use crate::config::TextEncoding;

@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Copyright (c) 2026 Joran -->
+
 # 串口调试助手（Serial Tool）
 
 > ⚠️ **本程序由 AI 编写**（代码由 AI 生成，人工进行需求整理、验证与使用）。

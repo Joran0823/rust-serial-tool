@@ -1,7 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Joran
+
 [package]
 name = "rust-serial-tool"
-version = "1.0.0"
+version = "2.0.1"
 edition = "2024"
+license = "MIT"
 
 [[bin]]
 name = "serial-tool"

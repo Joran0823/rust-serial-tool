@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Copyright (c) 2026 Joran -->
+
 # 串口调试助手（Serial Tool）设计文档
 
 > 状态：待评审（V1）

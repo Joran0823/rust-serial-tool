@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 应用主状态与事件循环。
 
 use crate::config::{Config, TextEncoding};

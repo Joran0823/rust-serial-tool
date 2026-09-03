@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 文件发送面板：选择文件、发送文件、进度条。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的文件发送区。
 
