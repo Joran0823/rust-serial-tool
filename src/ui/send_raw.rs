@@ -191,11 +191,7 @@ impl SerialApp {
                 let n = bytes.len();
                 self.session.send(Command::Write(bytes));
                 let content = self.send_input.trim().to_string();
-                if !content.is_empty() {
-                    self.send_history.retain(|h| h != &content);
-                    self.send_history.insert(0, content);
-                    self.send_history.truncate(20);
-                }
+                self.record_send_history(&content);
                 self.set_status(
                     self.t()
                         .fill(self.t().sent_bytes_fmt, &[("n", n.to_string())]),
@@ -204,6 +200,18 @@ impl SerialApp {
             }
             Err(e) => self.set_status(e, true),
         }
+    }
+
+    /// 记录一条发送历史：去重后置顶，最多保留 20 条；空白内容不记录。
+    /// 普通发送区与终端模式（回车发送命令行）共用同一历史列表。
+    pub(crate) fn record_send_history(&mut self, content: &str) {
+        let content = content.trim().to_string();
+        if content.is_empty() {
+            return;
+        }
+        self.send_history.retain(|h| h != &content);
+        self.send_history.insert(0, content);
+        self.send_history.truncate(20);
     }
 }
 

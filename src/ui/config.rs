@@ -502,6 +502,8 @@ mod tests {
             terminal_prompt: String::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
+            terminal_history_index: None,
+            terminal_history_draft: String::new(),
             rx_total: 0,
             tx_total: 0,
             paused: false,
