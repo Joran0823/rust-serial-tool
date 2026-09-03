@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 串口调试助手 - 入口
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 队列发送面板：队列管理、条目编辑、队列发送。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的队列区。
 

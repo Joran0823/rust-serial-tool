@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Copyright (c) 2026 Joran -->
+
 # AGENTS.md — 串口调试助手 (Serial Tool)
 
 > AI 编码助手快速上手指南。详细设计见 [docs/design.md](docs/design.md)。

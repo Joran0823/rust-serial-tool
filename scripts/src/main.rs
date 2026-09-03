@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 生成应用图标资产（在 scripts/ 目录下以 cargo run 运行）：
 //!   assets/app.ico - 多尺寸（256/64/48/32/16），用于 Windows 可执行文件资源
 //!

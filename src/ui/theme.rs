@@ -1,4 +1,7 @@
-﻿//! 主题感知颜色：深色/亮色支持，通过 getter 函数返回当前主题色。
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
+//! 主题感知颜色：深色/亮色支持，通过 getter 函数返回当前主题色。
 //! 常量保留历史值（深色）以便兼容；新代码使用 getter 函数。
 
 use eframe::egui;

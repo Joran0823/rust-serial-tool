@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 多语言支持：目前支持中文与英文。
 //!
 //! 界面文案全部通过 [`Strings`] 按语言查找；首次启动（无持久化配置）时根据

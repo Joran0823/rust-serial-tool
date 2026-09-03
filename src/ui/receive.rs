@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Joran
+
 //! 数据展示（接收区）：白色卡片带“接收区”标题 + 滚动展示区。
 //! 布局对应 docs/UI-Desing.svg（2026-08-01 版）的接收区。
 //!
