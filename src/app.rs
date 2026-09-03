@@ -71,7 +71,43 @@ fn default_dock_state() -> DockState<UiPanel> {
     let [_, _queue] = dock
         .main_surface_mut()
         .split_below(file, 0.19, vec![UiPanel::Queue]);
+    // 启动默认把「文件发送」「队列发送」折叠成标题条（可点 “+” 展开）
+    let file_node = dock.main_surface().find_tab(&UiPanel::File).unwrap().0;
+    let queue_node = dock.main_surface().find_tab(&UiPanel::Queue).unwrap().0;
+    set_dock_leaf_collapsed(&mut dock, file_node, true);
+    set_dock_leaf_collapsed(&mut dock, queue_node, true);
     dock
+}
+
+/// 设置默认布局叶子的折叠/展开状态，并沿父链同步折叠叶子计数。
+///
+/// egui_dock 折叠按钮点击后除了置叶子 collapsed，还会沿父链更新
+/// `collapsed_leaf_count`（布局按它给折叠叶子只留标题条高度）；
+/// 这里用公开的 Node API 复刻同一逻辑，保证初始布局/测试状态一致。
+fn set_dock_leaf_collapsed(dock: &mut DockState<UiPanel>, node: NodeIndex, collapsed: bool) {
+    dock.main_surface_mut()[node].set_collapsed(collapsed);
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        let left_count = dock.main_surface()[p.left()].collapsed_leaf_count();
+        let right_count = dock.main_surface()[p.right()].collapsed_leaf_count();
+        let count = if dock.main_surface()[p].is_horizontal() {
+            left_count.max(right_count)
+        } else {
+            left_count + right_count
+        };
+        if collapsed {
+            dock.main_surface_mut()[p].set_collapsed_leaf_count(count);
+            if dock.main_surface()[p.left()].is_collapsed()
+                && dock.main_surface()[p.right()].is_collapsed()
+            {
+                dock.main_surface_mut()[p].set_collapsed(true);
+            }
+        } else {
+            dock.main_surface_mut()[p].set_collapsed(false);
+            dock.main_surface_mut()[p].set_collapsed_leaf_count(count);
+        }
+        parent = p.parent();
+    }
 }
 
 pub struct SerialApp {
@@ -124,6 +160,10 @@ pub struct SerialApp {
     pub terminal_input: String,
     /// 待发送输入行中的光标位置（字符下标）
     pub terminal_cursor: usize,
+    /// 终端历史浏览位置（send_history 下标，越新越小；None 表示未在浏览）
+    pub terminal_history_index: Option<usize>,
+    /// 进入历史浏览前输入行的草稿（按下方向键 Down 回到最新时恢复）
+    pub terminal_history_draft: String,
 
     pub rx_total: u64,
     pub tx_total: u64,
@@ -204,6 +244,8 @@ impl SerialApp {
             terminal_prompt: String::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
+            terminal_history_index: None,
+            terminal_history_draft: String::new(),
             rx_total: 0,
             tx_total: 0,
             paused: false,
@@ -683,6 +725,10 @@ fn fix_file_panel_height(
     let Some((file_node, _)) = dock.main_surface().find_tab(&UiPanel::File) else {
         return;
     };
+    // 折叠状态只保留标题条，无需（也不应）按展开内容高度调整分组
+    if dock.main_surface()[file_node].is_collapsed() {
+        return;
+    }
     let standalone = dock
         .main_surface()
         .leaf(file_node)
@@ -769,6 +815,10 @@ fn fix_queue_panel_height(
     let Some((queue_node, _)) = dock.main_surface().find_tab(&UiPanel::Queue) else {
         return;
     };
+    // 折叠状态只保留标题条，无需（也不应）按展开内容高度调整分组
+    if dock.main_surface()[queue_node].is_collapsed() {
+        return;
+    }
     let standalone = dock
         .main_surface()
         .leaf(queue_node)
@@ -984,6 +1034,8 @@ mod tests {
             terminal_prompt: String::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
+            terminal_history_index: None,
+            terminal_history_draft: String::new(),
             rx_total: 0,
             tx_total: 0,
             paused: false,
@@ -1007,6 +1059,15 @@ mod tests {
         }
     }
 
+    /// 测试中把默认折叠的「文件发送」「队列发送」展开，便于断言展开态布局。
+    fn expand_file_queue_for_test(dock: &mut DockState<UiPanel>) {
+        for panel in [UiPanel::File, UiPanel::Queue] {
+            if let Some((node, _)) = dock.main_surface().find_tab(&panel) {
+                set_dock_leaf_collapsed(dock, node, false);
+            }
+        }
+    }
+
     /// 运行一帧 UI。egui 0.36 起 `FullOutput` 携带纹理增量，测试不渲染到屏幕，
     /// 必须先 `clear()`，否则丢弃时触发 epaint 的 panic 检查。
     fn run_ui(
@@ -1026,6 +1087,25 @@ mod tests {
         assert_eq!(tabs.len(), 5);
         for panel in UiPanel::ALL {
             assert!(tabs.contains(&panel));
+        }
+    }
+
+    #[test]
+    fn default_dock_starts_with_file_and_queue_collapsed() {
+        let dock = default_dock_state();
+        for panel in [UiPanel::Config, UiPanel::Receive, UiPanel::Send] {
+            let (node, _) = dock.main_surface().find_tab(&panel).unwrap();
+            assert!(
+                !dock.main_surface()[node].is_collapsed(),
+                "{panel:?} 默认不应折叠"
+            );
+        }
+        for panel in [UiPanel::File, UiPanel::Queue] {
+            let (node, _) = dock.main_surface().find_tab(&panel).unwrap();
+            assert!(
+                dock.main_surface()[node].is_collapsed(),
+                "{panel:?} 默认应折叠为标题条"
+            );
         }
     }
 
@@ -1058,6 +1138,7 @@ mod tests {
     #[test]
     fn file_panel_height_is_fixed_to_content() {
         let mut dock = default_dock_state();
+        expand_file_queue_for_test(&mut dock);
         let total_h = 700.0;
         let tab_h = 24.0;
         fix_file_panel_height(&mut dock, total_h, tab_h + FILE_BODY_H);
@@ -1533,6 +1614,7 @@ mod tests {
         let output = run_ui(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                expand_file_queue_for_test(&mut dock);
                 let open_panels = current_open_panels(&dock);
                 let mut viewer = DockViewer {
                     app: &mut app,
@@ -1823,6 +1905,7 @@ mod tests {
         let output = run_ui(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                expand_file_queue_for_test(&mut dock);
                 let config_body_h = app.config_panel_body_h;
                 let open_panels = current_open_panels(&dock);
                 let mut viewer = DockViewer {
@@ -1936,6 +2019,7 @@ mod tests {
             output = Some(run_ui(&ctx, input.clone(), |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let mut dock = app.dock_state.take().expect("dock_state 应始终存在");
+                    expand_file_queue_for_test(&mut dock);
                     let config_body_h = app.config_panel_body_h;
                     let open_panels = current_open_panels(&dock);
                     let mut viewer = DockViewer {

@@ -428,6 +428,20 @@ impl SerialApp {
         }
         let resp_id = resp.id;
         let focused = resp.has_focus();
+        if focused {
+            // 终端区域自己消费方向键（历史浏览/光标移动），
+            // 声明事件过滤器防止 egui 把 ↑/↓/←/→ 当作焦点导航导致失焦。
+            ui.ctx().memory_mut(|mem| {
+                mem.set_focus_lock_filter(
+                    resp_id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                );
+            });
+        }
         let blink_on = focused && (ui.input(|i| i.time) * 2.0) as i64 % 2 == 0;
 
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -654,6 +668,9 @@ impl SerialApp {
                     if enter_sends {
                         let line = std::mem::take(&mut self.terminal_input);
                         self.terminal_cursor = 0;
+                        // 发送后退出历史浏览状态，避免旧位置/草稿残留
+                        self.terminal_history_index = None;
+                        self.terminal_history_draft.clear();
                         self.terminal_send_line(&line);
                     } else {
                         self.terminal_send_bytes(b"\r");
@@ -685,6 +702,7 @@ impl SerialApp {
                     ..
                 } if enter_sends => {
                     self.terminal_cursor = self.terminal_cursor.saturating_sub(1);
+                    cancel_focus_navigation(ui);
                 }
                 egui::Event::Key {
                     key: egui::Key::ArrowRight,
@@ -693,6 +711,23 @@ impl SerialApp {
                 } if enter_sends => {
                     let n = self.terminal_input.chars().count();
                     self.terminal_cursor = (self.terminal_cursor + 1).min(n);
+                    cancel_focus_navigation(ui);
+                }
+                egui::Event::Key {
+                    key: egui::Key::ArrowUp,
+                    pressed: true,
+                    ..
+                } if enter_sends => {
+                    self.terminal_history_older();
+                    cancel_focus_navigation(ui);
+                }
+                egui::Event::Key {
+                    key: egui::Key::ArrowDown,
+                    pressed: true,
+                    ..
+                } if enter_sends => {
+                    self.terminal_history_newer();
+                    cancel_focus_navigation(ui);
                 }
                 egui::Event::Key {
                     key: egui::Key::Home,
@@ -752,8 +787,49 @@ impl SerialApp {
         self.terminal_input = chars[..idx].iter().chain(chars[idx + 1..].iter()).collect();
     }
 
+    /// ↑ 键：在发送历史中向上翻（越新的命令下标越小）；首次按下保存当前草稿。
+    fn terminal_history_older(&mut self) {
+        if self.send_history.is_empty() {
+            return;
+        }
+        match self.terminal_history_index {
+            None => {
+                // 第一次按 ↑：保存当前输入行，跳到最近一条命令
+                self.terminal_history_draft = std::mem::take(&mut self.terminal_input);
+                self.terminal_history_index = Some(0);
+            }
+            Some(i) if i + 1 < self.send_history.len() => {
+                self.terminal_history_index = Some(i + 1);
+            }
+            _ => return, // 已是最旧一条
+        }
+        let i = self.terminal_history_index.expect("刚设置过浏览位置");
+        self.terminal_input = self.send_history[i].clone();
+        self.terminal_cursor = self.terminal_input.chars().count();
+    }
+
+    /// ↓ 键：向较新的历史翻；越过最近一条后恢复浏览前的草稿。
+    fn terminal_history_newer(&mut self) {
+        match self.terminal_history_index {
+            None => {}
+            Some(0) => {
+                self.terminal_history_index = None;
+                self.terminal_input = std::mem::take(&mut self.terminal_history_draft);
+                self.terminal_cursor = self.terminal_input.chars().count();
+            }
+            Some(i) => {
+                let i = i - 1;
+                self.terminal_history_index = Some(i);
+                self.terminal_input = self.send_history[i].clone();
+                self.terminal_cursor = self.terminal_input.chars().count();
+            }
+        }
+    }
+
     /// 发送终端输入的整行内容（行尾附 CR），并按「自动回显」决定是否本地显示。
     fn terminal_send_line(&mut self, line: &str) {
+        // 回车发送的命令行记入发送区历史下拉框（去重置顶、忽略空行）
+        self.record_send_history(line);
         let line_bytes = codec::text::encode(line, self.config.text_encoding);
         let mut bytes = line_bytes.clone();
         bytes.push(b'\r');
@@ -897,6 +973,8 @@ impl SerialApp {
         self.terminal_decoder_enc = None;
         self.terminal_cache_invalid = false;
         self.terminal_decoded_len = 0;
+        self.terminal_history_index = None;
+        self.terminal_history_draft.clear();
     }
 
     /// 增量更新显示缓存：仅解码新增的数据段。
@@ -1051,6 +1129,13 @@ impl SerialApp {
 }
 
 /// 在系统文件管理器中打开日志文件所在目录（Windows 定位到文件，其他平台打开目录）。
+/// 方向键已被终端消费时，清掉 egui 本帧的“按方向键移动焦点”导航意图，
+/// 否则帧末会把焦点移给相邻控件（导致第二次按键失效）。
+fn cancel_focus_navigation(ui: &egui::Ui) {
+    ui.ctx()
+        .memory_mut(|mem| mem.move_focus(egui::FocusDirection::None));
+}
+
 fn open_log_folder_path(path: Option<&std::path::Path>) {
     let Some(path) = path else {
         return;
@@ -1284,6 +1369,8 @@ mod tests {
             terminal_prompt: String::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
+            terminal_history_index: None,
+            terminal_history_draft: String::new(),
             rx_total: 0,
             tx_total: 0,
             paused: false,
@@ -1775,6 +1862,160 @@ mod tests {
         );
         assert!(app.terminal_input.is_empty());
         assert_eq!(app.terminal_buffer, b"AT", "回显不应包含行尾 CR");
+    }
+
+    #[test]
+    fn terminal_enter_sends_records_command_history() {
+        let mut app = make_app();
+        app.config.terminal_enter_sends = true;
+        let ctx = egui::Context::default();
+        let feed = |ctx: &egui::Context, app: &mut SerialApp, events: Vec<egui::Event>| {
+            run_ui(
+                ctx,
+                egui::RawInput {
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.handle_terminal_keys(ui),
+            );
+        };
+        // 输入 "AT" 回车 → 记入历史
+        feed(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("AT".to_string()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.send_history, vec!["AT"]);
+        // 再次发送相同命令：去重，不重复入列
+        feed(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("AT".to_string()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.send_history, vec!["AT"]);
+        // 新命令置顶，旧命令后移
+        feed(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("ATE1".to_string()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.send_history, vec!["ATE1", "AT"]);
+        // 空白命令不记录
+        feed(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("   ".to_string()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.send_history, vec!["ATE1", "AT"]);
+    }
+
+    #[test]
+    fn terminal_arrows_browse_command_history_like_shell() {
+        let mut app = make_app();
+        app.config.terminal_enter_sends = true;
+        app.send_history = vec!["PING".to_string(), "ATE1".to_string(), "AT".to_string()];
+        let ctx = egui::Context::default();
+        let arrow = |k: egui::Key| egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let feed = |ctx: &egui::Context, app: &mut SerialApp, ev: egui::Event| {
+            run_ui(
+                ctx,
+                egui::RawInput {
+                    focused: true,
+                    events: vec![ev],
+                    ..Default::default()
+                },
+                |ui| app.handle_terminal_keys(ui),
+            );
+        };
+
+        // 输入半截草稿后按 ↑：保存草稿并逐条向旧命令翻
+        feed(&ctx, &mut app, egui::Event::Text("P".to_string()));
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowUp));
+        assert_eq!(app.terminal_input, "PING");
+        assert_eq!(app.terminal_cursor, 4);
+        assert_eq!(app.terminal_history_draft, "P");
+        assert_eq!(app.terminal_history_index, Some(0));
+
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowUp));
+        assert_eq!(app.terminal_input, "ATE1");
+        assert_eq!(app.terminal_history_index, Some(1));
+
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowUp));
+        assert_eq!(app.terminal_input, "AT");
+        assert_eq!(app.terminal_history_index, Some(2));
+
+        // 已是最旧一条：继续 ↑ 保持不变
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowUp));
+        assert_eq!(app.terminal_input, "AT");
+        assert_eq!(app.terminal_history_index, Some(2));
+
+        // ↓ 逐条向新翻，最后回到草稿
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowDown));
+        assert_eq!(app.terminal_input, "ATE1");
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowDown));
+        assert_eq!(app.terminal_input, "PING");
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowDown));
+        assert_eq!(app.terminal_input, "P");
+        assert_eq!(app.terminal_history_index, None);
+
+        // 历史为空时 ↑ 无副作用
+        let mut empty = make_app();
+        empty.config.terminal_enter_sends = true;
+        empty.terminal_input = "hi".to_string();
+        feed(&ctx, &mut empty, arrow(egui::Key::ArrowUp));
+        assert_eq!(empty.terminal_input, "hi");
+        assert_eq!(empty.terminal_history_index, None);
+
+        // 浏览后直接回车发送：发送后退出浏览状态
+        feed(&ctx, &mut app, arrow(egui::Key::ArrowUp));
+        feed(&ctx, &mut app, arrow(egui::Key::Enter));
+        assert_eq!(app.terminal_input, "");
+        assert_eq!(app.terminal_history_index, None);
+        assert_eq!(app.terminal_history_draft, "");
+        assert_eq!(app.send_history.first().map(String::as_str), Some("PING"));
     }
 
     #[test]

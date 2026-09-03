@@ -321,7 +321,7 @@ pub const ZH: Strings = Strings {
     show_timestamps: "显示时间戳",
     show_timestamps_tip: "在接收区显示每条数据的接收/发送时间",
 
-    send_file: "发送文件",
+    send_file: "文件发送",
     send_file_tip: "按当前模式发送所选文件",
     file_mode_tip: "选择文件发送模式",
     whole_file: "整块发送",
