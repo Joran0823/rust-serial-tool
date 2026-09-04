@@ -499,8 +499,6 @@ mod tests {
             terminal_decoder_enc: None,
             terminal_cache_invalid: false,
             terminal_decoded_len: 0,
-            terminal_markers: Vec::new(),
-            terminal_markers_inserted: 0,
             terminal_marker_spans: Vec::new(),
             terminal_prompt: String::new(),
             terminal_input: String::new(),

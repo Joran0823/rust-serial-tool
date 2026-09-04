@@ -151,11 +151,6 @@ pub struct SerialApp {
     pub terminal_cache_invalid: bool,
     /// 已解码进 terminal_text 的缓冲字节数
     pub terminal_decoded_len: usize,
-    /// 终端缓冲中各批数据的起始字节偏移与时间戳标记
-    /// （「显示时间戳」开启时终端同样显示）
-    pub terminal_markers: Vec<(usize, String)>,
-    /// 已插入 terminal_text 的标记数（重建时从 0 重新回放）
-    pub terminal_markers_inserted: usize,
     /// 时间戳标记在 terminal_text 中的字节范围（用于绿色渲染）
     pub terminal_marker_spans: Vec<(usize, usize)>,
     /// shell 提示符时间戳（显示时间戳 + 回车发送模式下，输入行前缀）
@@ -241,8 +236,6 @@ impl SerialApp {
             terminal_decoder_enc: None,
             terminal_cache_invalid: false,
             terminal_decoded_len: 0,
-            terminal_markers: Vec::new(),
-            terminal_markers_inserted: 0,
             terminal_marker_spans: Vec::new(),
             terminal_prompt: String::new(),
             terminal_input: String::new(),
@@ -1031,8 +1024,6 @@ mod tests {
             terminal_decoder_enc: None,
             terminal_cache_invalid: false,
             terminal_decoded_len: 0,
-            terminal_markers: Vec::new(),
-            terminal_markers_inserted: 0,
             terminal_marker_spans: Vec::new(),
             terminal_prompt: String::new(),
             terminal_input: String::new(),
