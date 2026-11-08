@@ -23,6 +23,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serialport = "4.10.0"
 sys-locale = "0.3.2"
 toml = "1.1.4"
+vt100 = "0.18.1"
 
 [build-dependencies]
 embed-resource = "3"

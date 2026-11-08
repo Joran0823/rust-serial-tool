@@ -197,7 +197,6 @@ pub struct Strings {
     pub auto_echo_tip: &'static str,
     pub enter_sends: &'static str,
     pub enter_sends_tip: &'static str,
-    pub terminal_empty: &'static str,
 
     // 状态 / 提示消息
     pub status_connected_fmt: &'static str,
@@ -406,7 +405,6 @@ pub const ZH: Strings = Strings {
     auto_echo_tip: "对端无回显时，在展示区显示发送的数据、终端模式回显键盘输入",
     enter_sends: "回车发送",
     enter_sends_tip: "仅按回车键时发送整行（回车字符一并发送）；关闭后按键即发（需启用终端模式）",
-    terminal_empty: "等待数据…",
 
     status_connected_fmt: "已连接 {port}",
     status_disconnected: "已断开",
@@ -602,7 +600,6 @@ pub const EN: Strings = Strings {
     auto_echo_tip: "Show sent data locally when the peer does not echo (echo typed input in terminal mode)",
     enter_sends: "Enter sends",
     enter_sends_tip: "Send the line only on Enter (including the Enter character); off = send as you type (requires terminal mode)",
-    terminal_empty: "Waiting for data…",
 
     status_connected_fmt: "Connected {port}",
     status_disconnected: "Disconnected",

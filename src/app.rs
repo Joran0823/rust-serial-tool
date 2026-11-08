@@ -142,19 +142,12 @@ pub struct SerialApp {
     pub display_decoder_enc: Option<TextEncoding>,
     pub display_dropped: u64,
 
-    // 终端模式（接收区）：原始字节缓冲 + 解码文本 + 输入行
-    pub terminal_buffer: Vec<u8>,
+    // 终端模式（接收区）：vt100 屏幕 + 输入行
     pub terminal_text: String,
     pub terminal_decoder: Option<encoding_rs::Decoder>,
     pub terminal_decoder_enc: Option<TextEncoding>,
-    /// 终端文本缓存需要整体重建（编码/显示模式变化或缓冲被裁剪）
-    pub terminal_cache_invalid: bool,
-    /// 已解码进 terminal_text 的缓冲字节数
-    pub terminal_decoded_len: usize,
-    /// 时间戳标记在 terminal_text 中的字节范围（用于绿色渲染）
-    pub terminal_marker_spans: Vec<(usize, usize)>,
-    /// shell 提示符时间戳（显示时间戳 + 回车发送模式下，输入行前缀）
-    pub terminal_prompt: String,
+    /// vt100 终端屏幕（负责 CR/LF、光标和 ANSI 颜色）
+    pub terminal_screen: crate::terminal::TerminalScreen,
     pub terminal_input: String,
     /// 待发送输入行中的光标位置（字符下标）
     pub terminal_cursor: usize,
@@ -230,14 +223,10 @@ impl SerialApp {
             display_decoder: None,
             display_decoder_enc: None,
             display_dropped: 0,
-            terminal_buffer: Vec::new(),
             terminal_text: String::new(),
             terminal_decoder: None,
             terminal_decoder_enc: None,
-            terminal_cache_invalid: false,
-            terminal_decoded_len: 0,
-            terminal_marker_spans: Vec::new(),
-            terminal_prompt: String::new(),
+            terminal_screen: crate::terminal::TerminalScreen::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
             terminal_history_index: None,
@@ -506,7 +495,7 @@ impl eframe::App for SerialApp {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
 
-        if self.display_dirty
+        if (self.display_dirty && !self.config.terminal_mode)
             || self.queue_sending
             || self.file_send_active
             || self.periodic_enabled
@@ -1018,14 +1007,10 @@ mod tests {
             display_decoder: None,
             display_decoder_enc: None,
             display_dropped: 0,
-            terminal_buffer: Vec::new(),
             terminal_text: String::new(),
             terminal_decoder: None,
             terminal_decoder_enc: None,
-            terminal_cache_invalid: false,
-            terminal_decoded_len: 0,
-            terminal_marker_spans: Vec::new(),
-            terminal_prompt: String::new(),
+            terminal_screen: crate::terminal::TerminalScreen::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
             terminal_history_index: None,
