@@ -11,6 +11,7 @@ mod config;
 mod i18n;
 mod queue_file;
 mod serial;
+mod terminal;
 mod ui;
 mod util;
 

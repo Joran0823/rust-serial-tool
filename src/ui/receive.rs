@@ -23,34 +23,8 @@ use std::path::PathBuf;
 const DATA_DISPLAY_CAP: usize = 256 * 1024;
 /// 显示缓存字符数上限（超出后丢弃最早的内容）
 const DISPLAY_CACHE_CAP: usize = 300_000;
-/// 终端显示缓冲字节数上限（超出后丢弃最早的内容并整体重建）
-const TERMINAL_BUF_CAP: usize = 256 * 1024;
-/// 终端显示文本字符数上限
-const TERMINAL_TEXT_CAP: usize = 300_000;
 /// 接收区右键菜单“全选”的一次性标记键（存储于 egui 临时数据）
 const RECV_SELECT_ALL_KEY: &str = "recv_select_all";
-/// ANSI 标准色（30–37 / 40–47）
-const ANSI_COLORS: [egui::Color32; 8] = [
-    egui::Color32::from_rgb(0x7A, 0x7A, 0x7A), // 30 黑（深色背景下提亮以便可见）
-    egui::Color32::from_rgb(0xCD, 0x31, 0x31), // 31 红
-    egui::Color32::from_rgb(0x0D, 0xBC, 0x79), // 32 绿
-    egui::Color32::from_rgb(0xE5, 0xE5, 0x10), // 33 黄
-    egui::Color32::from_rgb(0x24, 0x72, 0xC8), // 34 蓝
-    egui::Color32::from_rgb(0xBC, 0x3F, 0xBC), // 35 品红
-    egui::Color32::from_rgb(0x11, 0xA8, 0xCD), // 36 青
-    egui::Color32::from_rgb(0xE5, 0xE5, 0xE5), // 37 白
-];
-/// ANSI 亮色（90–97 / 100–107）
-const ANSI_BRIGHT_COLORS: [egui::Color32; 8] = [
-    egui::Color32::from_rgb(0x66, 0x66, 0x66), // 90
-    egui::Color32::from_rgb(0xF1, 0x4C, 0x4C), // 91
-    egui::Color32::from_rgb(0x23, 0xD1, 0x8B), // 92
-    egui::Color32::from_rgb(0xF5, 0xF5, 0x43), // 93
-    egui::Color32::from_rgb(0x3B, 0x8E, 0xEA), // 94
-    egui::Color32::from_rgb(0xD6, 0x70, 0xD6), // 95
-    egui::Color32::from_rgb(0x29, 0xB8, 0xDB), // 96
-    egui::Color32::from_rgb(0xFF, 0xFF, 0xFF), // 97
-];
 
 /// 一个数据段：标记文本 + 原始字节在展示缓冲中的范围。
 #[derive(Clone, Debug)]
@@ -125,6 +99,8 @@ impl SerialApp {
                             {
                                 self.display_cache_invalid = true;
                                 self.display_dirty = true;
+                                self.terminal_screen.reset();
+                                self.terminal_text.clear();
                             }
                         },
                     );
@@ -170,6 +146,10 @@ impl SerialApp {
                             {
                                 self.display_cache_invalid = true;
                                 self.display_dirty = true;
+                                self.terminal_decoder = None;
+                                self.terminal_decoder_enc = None;
+                                self.terminal_screen.reset();
+                                self.terminal_text.clear();
                             }
                         },
                     );
@@ -207,8 +187,6 @@ impl SerialApp {
             if ts_resp.changed() {
                 self.display_cache_invalid = true;
                 self.display_dirty = true;
-                self.terminal_cache_invalid = true;
-                self.terminal_prompt = self.terminal_prefix_text();
             }
             ui.checkbox(&mut self.paused, s.pause_receive)
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -400,11 +378,10 @@ impl SerialApp {
     /// 显示时间戳）；接收显示区本身就是输入区（类似 PuTTY/minicom），
     /// 点击后直接键盘输入，右键菜单支持全选/复制/粘贴。
     pub(crate) fn terminal_area(&mut self, ui: &mut egui::Ui) {
-        let s = self.t();
-        self.refresh_terminal_text();
-        // shell 提示符：行头恒为 #（时间戳可选），两种发送模式都在新行开始时生成
-        if self.terminal_prompt.is_empty() {
-            self.terminal_prompt = self.terminal_prefix_text();
+        let prefix = self.terminal_prefix_text();
+        self.terminal_screen.ensure_initial_prefix(&prefix);
+        if self.terminal_text.is_empty() {
+            self.terminal_text = self.terminal_screen.plain_text();
         }
 
         // 右键菜单「全选」：与普通接收区一致，用自定义高亮模拟选中
@@ -455,32 +432,29 @@ impl SerialApp {
                         .auto_shrink([false, false])
                         .stick_to_bottom(self.config.autoscroll)
                         .show(ui, |ui| {
-                            if !focused && self.terminal_text.is_empty() && self.terminal_input.is_empty()
-                            {
-                                ui.label(
-                                    egui::RichText::new(s.terminal_empty)
-                                        .monospace()
-                                        .color(egui::Color32::from_gray(120)),
-                                );
+                            let label =
+                                egui::Label::new(self.terminal_job_with_input(ui, blink_on, select_all));
+                            let label_resp = if select_all {
+                                egui::Frame::new()
+                                    .fill(ui.visuals().selection.bg_fill)
+                                    .inner_margin(egui::Margin::ZERO)
+                                    .show(ui, |ui| ui.add(label))
+                                    .inner
                             } else {
-                                let label = egui::Label::new(self.terminal_job_with_input(ui, blink_on, select_all));
-                                let label_resp = if select_all {
-                                    egui::Frame::new()
-                                        .fill(ui.visuals().selection.bg_fill)
-                                        .inner_margin(egui::Margin::ZERO)
-                                        .show(ui, |ui| ui.add(label))
-                                        .inner
-                                } else {
-                                    ui.add(label)
-                                };
-                                if select_all && (label_resp.clicked() || label_resp.dragged()) {
-                                    ui.ctx().data_mut(|d| d.remove_temp::<bool>(select_all_id));
-                                }
-                                // 右键菜单挂在文本上（与普通接收区一致）：全选/复制/粘贴
-                                label_resp.context_menu(|ui| {
-                                    self.terminal_menu(ui, select_all_id, resp_id);
-                                });
+                                ui.add(label)
+                            };
+                            // 文本 Label 默认可选中，会拦截点击；这里补一次焦点请求，
+                            // 否则终端有内容后点击文字无法重新获得键盘输入焦点。
+                            if label_resp.clicked() || label_resp.drag_stopped() {
+                                ui.ctx().memory_mut(|mem| mem.request_focus(resp_id));
                             }
+                            if select_all && (label_resp.clicked() || label_resp.dragged()) {
+                                ui.ctx().data_mut(|d| d.remove_temp::<bool>(select_all_id));
+                            }
+                            // 右键菜单挂在文本上（与普通接收区一致）：全选/复制/粘贴
+                            label_resp.context_menu(|ui| {
+                                self.terminal_menu(ui, select_all_id, resp_id);
+                            });
                         });
                 });
         });
@@ -507,7 +481,7 @@ impl SerialApp {
             ui.close();
         }
         if ui.selectable_label(false, s.copy).clicked() {
-            ui.ctx().copy_text(self.terminal_text.clone());
+            ui.ctx().copy_text(self.terminal_screen.plain_text());
             ui.close();
         }
         if ui.selectable_label(false, s.paste).clicked() {
@@ -528,70 +502,11 @@ impl SerialApp {
         let font_id = egui::TextStyle::Monospace.resolve(ui.style());
         let mut job = egui::text::LayoutJob::default();
         job.wrap.max_width = f32::INFINITY;
-        // 数据段用白色/ANSI 颜色，时间戳标记统一用绿色（仿 shell 提示符）
-        let mut cursor = 0usize;
-        for &(start, end) in &self.terminal_marker_spans {
-            if start > cursor {
-                append_ansi_text(&mut job, &font_id, &self.terminal_text[cursor..start]);
-            }
-            push_run(
-                &mut job,
-                &self.terminal_text[start..end],
-                &font_id,
-                theme::TERMINAL_PROMPT,
-                egui::Color32::TRANSPARENT,
-            );
-            cursor = end;
-        }
-        if cursor < self.terminal_text.len() {
-            append_ansi_text(&mut job, &font_id, &self.terminal_text[cursor..]);
-        }
+        self.terminal_screen.append_job(&mut job, &font_id);
         let chars: Vec<char> = self.terminal_input.chars().collect();
         let cursor = self.terminal_cursor.min(chars.len());
         let before: String = chars[..cursor].iter().collect();
         let after: String = chars[cursor..].iter().collect();
-        // shell 提示符：输入行以 时间戳（开启）+绿色 #（恒有）为行头。
-        // 回车发送模式下输入行是虚拟行（缓冲未发送）；即时发送模式下，
-        // 仅当显示处于新行行首时补提示符（按下回车已结束上一行）。
-        if self.config.terminal_enter_sends {
-            if !self.terminal_text.is_empty()
-                && !self.terminal_text.ends_with('\n')
-                && !self.terminal_text.ends_with('\r')
-            {
-                // 提示符总在新一行行首
-                job.append(
-                    "\n",
-                    0.0,
-                    egui::TextFormat {
-                        font_id: font_id.clone(),
-                        color: theme::TERMINAL_TEXT,
-                        ..Default::default()
-                    },
-                );
-            }
-            job.append(
-                &self.terminal_prompt,
-                0.0,
-                egui::TextFormat {
-                    font_id: font_id.clone(),
-                    color: theme::TERMINAL_PROMPT,
-                    ..Default::default()
-                },
-            );
-        } else if self.terminal_text.is_empty()
-            || self.terminal_text.ends_with('\n')
-            || self.terminal_text.ends_with('\r')
-        {
-            job.append(
-                &self.terminal_prompt,
-                0.0,
-                egui::TextFormat {
-                    font_id: font_id.clone(),
-                    color: theme::TERMINAL_PROMPT,
-                    ..Default::default()
-                },
-            );
-        }
         if !before.is_empty() {
             job.append(
                 &before,
@@ -658,7 +573,7 @@ impl SerialApp {
                             .data_mut(|d| d.insert_temp(egui::Id::new(RECV_SELECT_ALL_KEY), true));
                     }
                     egui::Key::C => {
-                        ui.ctx().copy_text(self.terminal_text.clone());
+                        ui.ctx().copy_text(self.terminal_screen.plain_text());
                     }
                     egui::Key::V => {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
@@ -693,7 +608,9 @@ impl SerialApp {
                         // 使下一行行首出现 #（不再原样回显不可见的 CR）
                         self.session.send(Command::Write(b"\r".to_vec()));
                         if self.config.terminal_auto_echo {
-                            self.append_terminal_bytes(b"\n");
+                            let prefix = self.terminal_prefix_text();
+                            self.terminal_screen.feed_local_line_break(&prefix);
+                            self.refresh_terminal_text();
                         }
                     }
                 }
@@ -855,16 +772,13 @@ impl SerialApp {
         let mut bytes = line_bytes.clone();
         bytes.push(b'\r');
         self.session.send(Command::Write(bytes));
-        // 本地回显：命令内容 + 一个真正的换行（不回显 CR）。
-        // 这样回车后光标位于下一行行首，随后对端返回的数据显示在第二行，
-        // 而不是被追加到当前命令行末尾。
+        // 本地回显提交命令行并换到下一行；随后对端回显的首个换行会被
+        // 终端屏幕忽略，避免本地和对端各换一次行而多出空行。
         if self.config.terminal_auto_echo {
-            self.append_terminal_bytes(&line_bytes);
-            self.append_terminal_bytes(b"\n");
-        }
-        // 回车发送后开启新一行：刷新行头提示符（时间戳或 #）
-        if self.config.terminal_enter_sends {
-            self.terminal_prompt = self.terminal_prefix_text();
+            self.terminal_screen.feed_local(line);
+            let prefix = self.terminal_prefix_text();
+            self.terminal_screen.feed_local_line_break(&prefix);
+            self.refresh_terminal_text();
         }
     }
 
@@ -875,7 +789,9 @@ impl SerialApp {
         }
         self.session.send(Command::Write(bytes.to_vec()));
         if self.config.terminal_auto_echo {
-            self.append_terminal_bytes(bytes);
+            self.terminal_screen
+                .feed_local(&String::from_utf8_lossy(bytes));
+            self.refresh_terminal_text();
         }
     }
 
@@ -889,48 +805,12 @@ impl SerialApp {
         }
     }
 
-    /// 追加字节到终端显示缓冲（仅接收数据与本地回显使用）。
-    /// 前缀不带 [RX]/[TX] 方向标记：终端仿照 shell，以时间戳或 # 作提示符。
+    /// 把接收字节解码后交给 vt100 终端屏幕。
     pub(crate) fn append_terminal_bytes(&mut self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
-        // 原始字节原样追加，不因“一批数据”而强制换行；
-        // 行首前缀由解码阶段按真实换行符（0x0A）生成。
-        self.terminal_buffer.extend_from_slice(bytes);
-        if self.terminal_buffer.len() > TERMINAL_BUF_CAP {
-            let cut = self.terminal_buffer.len() - TERMINAL_BUF_CAP;
-            self.terminal_buffer.drain(..cut);
-            // 丢弃头部后流式解码状态失效，需要整体重建
-            self.terminal_cache_invalid = true;
-        }
-        self.terminal_decoded_len = self
-            .terminal_decoded_len
-            .min(self.terminal_buffer.len());
-    }
-
-    /// 增量解码终端缓冲到显示文本；编码/显示模式变化或缓冲被裁剪时整体重建。
-    fn refresh_terminal_text(&mut self) {
-        if self.terminal_cache_invalid {
-            self.terminal_cache_invalid = false;
-            self.terminal_text.clear();
-            self.terminal_marker_spans.clear();
-            self.terminal_decoder = None;
-            self.terminal_decoder_enc = None;
-            self.terminal_decoded_len = 0;
-        }
-        if self.terminal_decoded_len >= self.terminal_buffer.len() {
-            return;
-        }
-        // 行首前缀：时间戳开启时为 [HH:MM:SS.mmm] ，关闭时为绿色 #。
-        // 只在真正开始一行数据（文本为空或上一字符是换行/CR）时插入，不强制换行；
-        // 数据中间的换行保持原样，换行后的下一行行首再补前缀。
-        let marker = self.terminal_prefix_text();
-        let mut line_start = self.terminal_text.is_empty()
-            || self.terminal_text.ends_with('\n')
-            || self.terminal_text.ends_with('\r');
-        let bytes = &self.terminal_buffer[self.terminal_decoded_len..];
-        let decoded: String = match self.config.display_mode {
+        let text = match self.config.display_mode {
             DisplayMode::Text => {
                 let enc = self.config.text_encoding;
                 if enc == TextEncoding::Ascii {
@@ -957,51 +837,22 @@ impl SerialApp {
                 hex
             }
         };
-        for ch in decoded.chars() {
-            if line_start && ch != '\n' && ch != '\r' {
-                let start = self.terminal_text.len();
-                self.terminal_text.push_str(&marker);
-                self.terminal_marker_spans.push((start, self.terminal_text.len()));
-                line_start = false;
-            }
-            self.terminal_text.push(ch);
-            if ch == '\n' {
-                line_start = true;
-            } else if ch == '\r' {
-                // 渲染层把孤立 CR 当换行显示，因此 CR 后同样视为行首
-                line_start = true;
-            }
-        }
-        self.terminal_decoded_len = self.terminal_buffer.len();
-        if self.terminal_text.len() > TERMINAL_TEXT_CAP {
-            let cut =
-                self.terminal_text
-                    .floor_char_boundary(self.terminal_text.len() - TERMINAL_TEXT_CAP);
-            self.terminal_text.drain(..cut);
-            self.terminal_marker_spans = self
-                .terminal_marker_spans
-                .iter()
-                .filter_map(|&(s, e)| {
-                    if e <= cut {
-                        None
-                    } else {
-                        Some((s.saturating_sub(cut), e - cut))
-                    }
-                })
-                .collect();
-        }
+        let prefix = self.terminal_prefix_text();
+        self.terminal_screen.feed_received(&text, &prefix);
+        self.terminal_text = self.terminal_screen.plain_text();
+    }
+
+    /// 刷新终端纯文本缓存（测试/复制使用）。
+    fn refresh_terminal_text(&mut self) {
+        self.terminal_text = self.terminal_screen.plain_text();
     }
 
     /// 清空终端显示缓冲（进入终端模式或点击「清空显示」时调用）。
     pub(crate) fn clear_terminal_display(&mut self) {
-        self.terminal_buffer.clear();
+        self.terminal_screen.reset();
         self.terminal_text.clear();
-        self.terminal_marker_spans.clear();
-        self.terminal_prompt.clear();
         self.terminal_decoder = None;
         self.terminal_decoder_enc = None;
-        self.terminal_cache_invalid = false;
-        self.terminal_decoded_len = 0;
         self.terminal_history_index = None;
         self.terminal_history_draft.clear();
     }
@@ -1243,127 +1094,6 @@ fn stream_decode(dec: &mut encoding_rs::Decoder, bytes: &[u8], last: bool) -> St
     String::from_utf8_lossy(&out[..written]).into_owned()
 }
 
-/// 将终端文本（含 ANSI SGR 颜色转义）构建为带颜色的 LayoutJob。
-#[cfg(test)]
-fn terminal_job(font_id: &egui::FontId, text: &str) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = f32::INFINITY;
-    append_ansi_text(&mut job, font_id, text);
-    job
-}
-
-/// 解析一段终端文本（含 ANSI SGR 颜色转义）并把文本段追加到已有 job。
-/// 标记段与数据段分开追加时，各自以默认前景色开始解析。
-fn append_ansi_text(job: &mut egui::text::LayoutJob, font_id: &egui::FontId, text: &str) {
-    let mut fg = theme::TERMINAL_TEXT;
-    let mut bg = egui::Color32::TRANSPARENT;
-    let mut bold = false;
-    let mut buf = String::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == '\u{1b}' {
-            push_run(job, &buf, font_id, fg, bg);
-            buf.clear();
-            if i + 1 < chars.len() && chars[i + 1] == '[' {
-                // CSI 序列：`ESC [ ... <final>`，final 字节为 0x40–0x7E
-                let mut j = i + 2;
-                while j < chars.len() && !(chars[j] as u32 >= 0x40 && chars[j] as u32 <= 0x7E) {
-                    j += 1;
-                }
-                if j < chars.len() && chars[j] == 'm' {
-                    let params: String = chars[i + 2..j].iter().collect();
-                    apply_sgr(&params, &mut fg, &mut bg, &mut bold);
-                }
-                i = j + 1;
-            } else if i + 1 < chars.len() {
-                // 两字符转义序列（如 `ESC ( B`）直接丢弃
-                i += 2;
-            } else {
-                i += 1;
-            }
-        } else {
-            match ch {
-                // 终端常见的 CR/CRLF 都只产生一次换行：
-                // CR 转成换行；若后面紧跟 LF（CRLF）则把 LF 一并消费
-                '\r' => {
-                    buf.push('\n');
-                    if i + 1 < chars.len() && chars[i + 1] == '\n' {
-                        i += 1;
-                    }
-                }
-                '\n' | '\t' => buf.push(ch),
-                c if (c as u32) < 0x20 => {} // 其余控制字符不显示
-                _ => buf.push(ch),
-            }
-            i += 1;
-        }
-    }
-    push_run(job, &buf, font_id, fg, bg);
-}
-
-fn push_run(
-    job: &mut egui::text::LayoutJob,
-    text: &str,
-    font_id: &egui::FontId,
-    fg: egui::Color32,
-    bg: egui::Color32,
-) {
-    if text.is_empty() {
-        return;
-    }
-    job.append(
-        text,
-        0.0,
-        egui::TextFormat {
-            font_id: font_id.clone(),
-            color: fg,
-            background: bg,
-            ..Default::default()
-        },
-    );
-}
-
-/// 解析 SGR 参数并更新当前前景/背景色与加粗状态。
-fn apply_sgr(
-    params: &str,
-    fg: &mut egui::Color32,
-    bg: &mut egui::Color32,
-    bold: &mut bool,
-) {
-    for p in params.split(';') {
-        match p {
-            "" | "0" => {
-                *fg = theme::TERMINAL_TEXT;
-                *bg = egui::Color32::TRANSPARENT;
-                *bold = false;
-            }
-            "1" => *bold = true,
-            "22" => *bold = false,
-            "39" => *fg = theme::TERMINAL_TEXT,
-            "49" => *bg = egui::Color32::TRANSPARENT,
-            _ => {
-                if let Ok(n) = p.parse::<u16>() {
-                    match n {
-                        30..=37 => {
-                            *fg = if *bold {
-                                ANSI_BRIGHT_COLORS[(n - 30) as usize]
-                            } else {
-                                ANSI_COLORS[(n - 30) as usize]
-                            }
-                        }
-                        90..=97 => *fg = ANSI_BRIGHT_COLORS[(n - 90) as usize],
-                        40..=47 => *bg = ANSI_COLORS[(n - 40) as usize],
-                        100..=107 => *bg = ANSI_BRIGHT_COLORS[(n - 100) as usize],
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1393,14 +1123,10 @@ mod tests {
             display_decoder: None,
             display_decoder_enc: None,
             display_dropped: 0,
-            terminal_buffer: Vec::new(),
             terminal_text: String::new(),
             terminal_decoder: None,
             terminal_decoder_enc: None,
-            terminal_cache_invalid: false,
-            terminal_decoded_len: 0,
-            terminal_marker_spans: Vec::new(),
-            terminal_prompt: String::new(),
+            terminal_screen: crate::terminal::TerminalScreen::new(),
             terminal_input: String::new(),
             terminal_cursor: 0,
             terminal_history_index: None,
@@ -1547,12 +1273,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_buffer_tracks_rx_only() {
+    fn terminal_plain_text_tracks_rx_only() {
         let mut app = make_app();
+        app.config.show_timestamps = false;
         app.append_rx(b"hello");
         app.append_tx(b"world");
         // 终端显示只包含接收数据（发送数据不混入终端，由自动回显单独处理）
-        assert_eq!(app.terminal_buffer, b"hello");
+        assert_eq!(app.terminal_text, "# hello");
     }
 
     #[test]
@@ -1561,24 +1288,21 @@ mod tests {
         app.config.show_timestamps = false;
         app.append_rx(b"hello\n");
         app.refresh_terminal_text();
-        // 未开启时间戳时行头显示绿色 #（# 存于文本，颜色由 marker span 渲染）
-        assert_eq!(app.terminal_text, "# hello\n");
+        // 当前行在换行后重新生成行首前缀
+        assert_eq!(app.terminal_text, "# hello\n# ");
         assert!(!app.terminal_text.contains("[RX]"));
         assert!(!app.terminal_text.contains('['));
-        assert_eq!(app.terminal_marker_spans.len(), 1);
     }
 
     #[test]
     fn terminal_text_includes_timestamps_when_enabled() {
-        // 「显示时间戳」开启时，终端模式同样显示 [HH:MM:SS.mmm] 提示符前缀，
-        // 但不带 [RX]/[TX] 方向标记（仿照 shell）
         let mut app = make_app();
         app.config.show_timestamps = true;
         app.append_rx(b"hello\n");
         app.refresh_terminal_text();
         assert!(
             app.terminal_text.starts_with("[")
-                && app.terminal_text.contains("]# hello\n"),
+                && app.terminal_text.contains("]# hello\n["),
             "终端文本应包含 时间戳+# 行头: {:?}",
             app.terminal_text
         );
@@ -1587,11 +1311,6 @@ mod tests {
             "终端文本不应包含方向标记: {:?}",
             app.terminal_text
         );
-        // 关闭后重建缓存，标记消失
-        app.config.show_timestamps = false;
-        app.terminal_cache_invalid = true;
-        app.refresh_terminal_text();
-        assert_eq!(app.terminal_text, "# hello\n");
     }
 
     #[test]
@@ -1601,9 +1320,10 @@ mod tests {
         app.config.show_timestamps = false;
         app.append_rx(b"hel");
         app.refresh_terminal_text();
+        assert_eq!(app.terminal_text, "# hel");
         app.append_rx(b"lo\n");
         app.refresh_terminal_text();
-        assert_eq!(app.terminal_text, "# hello\n");
+        assert_eq!(app.terminal_text, "# hello\n# ");
 
         // 收到换行后的新数据才另起一行并补前缀
         app.append_rx(b"world");
@@ -1612,26 +1332,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_text_prefixes_every_real_line_when_timestamps_enabled() {
+    fn terminal_text_prefixes_every_line_including_empty_lines() {
         let mut app = make_app();
-        app.config.show_timestamps = true;
-        // 一批内多个换行：每个真实换行后的行首都补时间戳，不额外产生空行
+        app.config.show_timestamps = false;
         app.append_rx(b"a\nb\n\nc");
         app.refresh_terminal_text();
         let text = &app.terminal_text;
-        assert!(
-            text.starts_with('[') && text.contains("]# a\n"),
-            "首行应以 时间戳+# 开头: {text:?}"
-        );
-        assert!(
-            text.contains("\n[") && text.contains("]# b\n\n["),
-            "第二行/第四行行首应有时间戳+# 且空行保留: {text:?}"
-        );
-        assert_eq!(
-            app.terminal_marker_spans.len(),
-            3,
-            "a/b/c 三行内容应各有 1 个行首前缀（空行不加）: {text:?}"
-        );
+        assert_eq!(text, "# a\n# b\n# \n# c");
     }
 
     #[test]
@@ -1641,44 +1348,6 @@ mod tests {
         app.append_rx(&[0x01, 0x0A, 0xFF]);
         app.refresh_terminal_text();
         assert!(app.terminal_text.contains("01 0A FF"));
-    }
-
-    #[test]
-    fn terminal_job_parses_ansi_colors() {
-        let font_id = egui::FontId::monospace(14.0);
-        let job = terminal_job(&font_id, "\u{1b}[1;31mred\u{1b}[0mplain");
-        assert_eq!(job.text, "redplain");
-        assert_eq!(job.sections.len(), 2);
-        // 加粗 + 红色（31）→ 亮红
-        assert_eq!(job.sections[0].format.color, ANSI_BRIGHT_COLORS[1]);
-        assert_eq!(job.sections[0].format.background, egui::Color32::TRANSPARENT);
-        // 重置后回到默认前景色
-        assert_eq!(job.sections[1].format.color, theme::TERMINAL_TEXT);
-    }
-
-    #[test]
-    fn terminal_job_hides_other_csi_sequences() {
-        let font_id = egui::FontId::monospace(14.0);
-        // 光标移动等 CSI 序列不显示；颜色自 SGR 之后生效
-        let job = terminal_job(&font_id, "a\u{1b}[2Jb\u{1b}[32mc");
-        assert_eq!(job.text, "abc");
-        assert_eq!(job.sections.len(), 2);
-        assert_eq!(job.sections[0].format.color, theme::TERMINAL_TEXT);
-        assert_eq!(job.sections[1].format.color, ANSI_COLORS[2]);
-    }
-
-    #[test]
-    fn terminal_job_crlf_produces_single_linebreak() {
-        let font_id = egui::FontId::monospace(14.0);
-        // CRLF 必须只产生一次换行，不能渲染出空行
-        let job = terminal_job(&font_id, "a\r\nb");
-        assert_eq!(job.text, "a\nb");
-        // 孤立 CR 也按一次换行处理
-        let job = terminal_job(&font_id, "a\rb");
-        assert_eq!(job.text, "a\nb");
-        // 两段 CRLF（一个空行）仍只产生对应数量的换行
-        let job = terminal_job(&font_id, "a\r\n\r\nb");
-        assert_eq!(job.text, "a\n\nb");
     }
 
     #[test]
@@ -1751,7 +1420,7 @@ mod tests {
             if enter_sends {
                 assert_eq!(app.terminal_input, "AB", "回车发送模式下粘贴应进入输入行");
             } else {
-                assert_eq!(app.terminal_buffer, b"AB", "直接发送模式下粘贴应发送字节");
+                assert_eq!(app.terminal_text, "AB", "直接发送模式下粘贴应发送字节");
             }
         }
     }
@@ -1774,36 +1443,63 @@ mod tests {
                 );
             })
         };
-        // 首帧：终端渲染后提示符自动生成（时间戳格式）
+        // 时间戳作为真正的行前缀写入终端内容
         render(&mut app);
         assert!(
-            app.terminal_prompt.starts_with('[') && app.terminal_prompt.ends_with("# "),
-            "应生成 时间戳+# 提示符: {:?}",
-            app.terminal_prompt
+            app.terminal_text.starts_with('[')
+                && app.terminal_text.contains("]# OK\n["),
+            "应生成 时间戳+# 行前缀: {:?}",
+            app.terminal_text
         );
         // 输入内容应紧跟在提示符之后
         app.terminal_input = "AT".to_string();
         app.terminal_cursor = 2;
         let output = render(&mut app);
-        let prompt_and_input = format!("{}{}", app.terminal_prompt, "AT");
         let found = output.shapes.iter().any(|c| {
             if let egui::epaint::Shape::Text(ts) = &c.shape {
-                ts.galley.job.text.contains(&prompt_and_input)
+                ts.galley.job.text.contains("AT")
             } else {
                 false
             }
         });
-        assert!(
-            found,
-            "输入应显示在提示符之后（提示符 {:?}）",
-            app.terminal_prompt
-        );
+        assert!(found, "输入应显示在终端当前行之后");
         // 回车发送后提示符刷新（新一行）
         app.terminal_send_line("AT");
-        assert!(
-            !app.terminal_prompt.is_empty(),
-            "发送后应生成新提示符"
-        );
+        assert!(app.terminal_text.contains("]# AT\n["));
+    }
+
+    #[test]
+    fn terminal_enter_commits_prompt_timestamp_before_peer_echo() {
+        let mut app = make_app();
+        app.config.terminal_mode = true;
+        app.config.terminal_auto_echo = true;
+        app.config.terminal_enter_sends = true;
+        app.config.show_timestamps = false;
+        app.terminal_screen.ensure_initial_prefix("# ");
+
+        app.terminal_send_line("AT");
+        app.refresh_terminal_text();
+        assert_eq!(app.terminal_text, "# AT\n# ");
+
+        // 对端回显后，原命令行仍在，只有新一行使用接收时间
+        app.append_rx(b"AT\r");
+        app.refresh_terminal_text();
+        let lines: Vec<&str> = app.terminal_text.lines().collect();
+        assert_eq!(lines, vec!["# AT", "# AT", "# "]);
+    }
+
+    #[test]
+    fn terminal_empty_enter_keeps_prompt_line() {
+        let mut app = make_app();
+        app.config.terminal_mode = true;
+        app.config.terminal_auto_echo = true;
+        app.config.terminal_enter_sends = true;
+        app.config.show_timestamps = false;
+        app.terminal_screen.ensure_initial_prefix("# ");
+
+        app.terminal_send_line("");
+        app.refresh_terminal_text();
+        assert_eq!(app.terminal_text, "# \n# ");
     }
 
     #[test]
@@ -1920,6 +1616,8 @@ mod tests {
         let mut app = make_app();
         app.config.terminal_auto_echo = true;
         app.config.terminal_enter_sends = true;
+        app.config.show_timestamps = false;
+        app.terminal_screen.ensure_initial_prefix("# ");
         let ctx = egui::Context::default();
 
         // 打字只进入待发送输入行，不立即发送
@@ -1933,7 +1631,7 @@ mod tests {
             |ui| app.handle_terminal_keys(ui),
         );
         assert_eq!(app.terminal_input, "AT");
-        assert!(app.terminal_buffer.is_empty());
+        assert!(app.terminal_text.is_empty());
 
         // 回车发送整行 + CR（CR 只发送给串口）；自动回显显示命令并本地换行
         let _ = run_ui(
@@ -1952,11 +1650,7 @@ mod tests {
             |ui| app.handle_terminal_keys(ui),
         );
         assert!(app.terminal_input.is_empty());
-        assert_eq!(
-            app.terminal_buffer,
-            b"AT\n",
-            "回显应为命令 + 本地换行（不含 CR）"
-        );
+        assert_eq!(app.terminal_text, "# AT\n# ");
     }
 
     #[test]
@@ -1965,6 +1659,7 @@ mod tests {
         app.config.terminal_auto_echo = true;
         app.config.terminal_enter_sends = true;
         app.config.show_timestamps = false;
+        app.terminal_screen.ensure_initial_prefix("# ");
         let ctx = egui::Context::default();
         let feed = |ctx: &egui::Context, app: &mut SerialApp, events: Vec<egui::Event>| {
             run_ui(
@@ -1992,12 +1687,44 @@ mod tests {
             ],
         );
         app.refresh_terminal_text();
-        // 回车后本地回显已真正换行
-        assert_eq!(app.terminal_text, "# AT\n");
-        // 对端随后返回的数据必须显示在下一行，而不是拼到 AT 行尾
+        // 回车后本地回显命令行并换到下一行
+        assert_eq!(app.terminal_text, "# AT\n# ");
+        // 对端返回数据后显示在下一行，末尾 CRLF 只移动光标
         app.append_rx(b"OK\r\n");
         app.refresh_terminal_text();
-        assert_eq!(app.terminal_text, "# AT\n# OK\r\n");
+        assert_eq!(app.terminal_text, "# AT\n# OK\n# ");
+    }
+
+    #[test]
+    fn peer_crlf_only_keeps_prompt_on_second_line() {
+        let mut app = make_app();
+        app.config.terminal_auto_echo = true;
+        app.config.terminal_enter_sends = true;
+        app.config.show_timestamps = false;
+        app.terminal_screen.ensure_initial_prefix("# ");
+        let ctx = egui::Context::default();
+        let _ = run_ui(
+            &ctx,
+            egui::RawInput {
+                focused: true,
+                events: vec![
+                    egui::Event::Text("AT".to_string()),
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| app.handle_terminal_keys(ui),
+        );
+        // 对端只回显回车：忽略这次重复换行，提示符保持第二行
+        app.append_rx(b"\r\n");
+        app.refresh_terminal_text();
+        assert_eq!(app.terminal_text, "# AT\n# ");
     }
 
     #[test]
@@ -2173,7 +1900,7 @@ mod tests {
             |ui| app.handle_terminal_keys(ui),
         );
         assert!(app.terminal_input.is_empty());
-        assert_eq!(app.terminal_buffer, b"AB");
+        assert_eq!(app.terminal_text, "AB");
     }
 
     #[test]
@@ -2192,7 +1919,7 @@ mod tests {
                 |ui| app.receive_area(ui),
             );
         });
-        assert_eq!(app.terminal_prompt, "# ", "即时模式空行也应显示 # 提示符");
+        assert_eq!(app.terminal_text, "# ", "即时模式空行也应显示 # 提示符");
 
         let key = |k: egui::Key| egui::Event::Key {
             key: k,
@@ -2217,9 +1944,54 @@ mod tests {
         }
         feed(&ctx, &mut app, key(egui::Key::Enter));
         // 回显内容为 "AT" + 本地换行（CR 只发送给串口，不回显）
-        assert_eq!(app.terminal_buffer, b"AT\n");
-        app.refresh_terminal_text();
-        assert_eq!(app.terminal_text, "# AT\n");
+        assert_eq!(app.terminal_text, "# AT\n# ");
+    }
+
+    #[test]
+    fn terminal_click_on_text_restores_focus() {
+        let ctx = egui::Context::default();
+        let mut app = make_app();
+        app.config.terminal_mode = true;
+        app.config.terminal_enter_sends = true;
+        app.append_terminal_bytes(b"hello\r\n");
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0));
+        let run = |app: &mut SerialApp, input: egui::RawInput| {
+            let _ = run_ui(&ctx, input, |ui| {
+                app.terminal_area(ui);
+            });
+        };
+        let click_pos = egui::pos2(20.0, 20.0);
+        let mut input = egui::RawInput {
+            screen_rect: Some(rect),
+            focused: true,
+            ..Default::default()
+        };
+        input.events.push(egui::Event::PointerMoved(click_pos));
+        run(&mut app, input);
+        for pressed in [true, false] {
+            let mut input = egui::RawInput {
+                screen_rect: Some(rect),
+                focused: true,
+                ..Default::default()
+            };
+            input.events.push(egui::Event::PointerButton {
+                pos: click_pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            run(&mut app, input);
+        }
+        run(
+            &mut app,
+            egui::RawInput {
+                screen_rect: Some(rect),
+                focused: true,
+                events: vec![egui::Event::Text("A".into())],
+                ..Default::default()
+            },
+        );
+        assert_eq!(app.terminal_input, "A", "点击终端文本后应获得焦点并可输入");
     }
 
     #[test]
